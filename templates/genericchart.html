@@ -1,61 +1,55 @@
 {{ define "js"}}
-    <script src="https://code.highcharts.com/stock/highstock.js"></script>
-    <script src="https://code.highcharts.com/modules/exporting.js"></script>
-    <script src="https://code.highcharts.com/modules/offline-exporting.js"></script>
+<script src="https://code.highcharts.com/stock/highstock.js"></script>
+<script src="https://code.highcharts.com/modules/exporting.js"></script>
+<script src="https://code.highcharts.com/modules/offline-exporting.js"></script>
+<script src="/js/highcharts-global-options.js"></script>
 
-    <script>
-        Highcharts.stockChart('chart', {
-            chart: {
-                type: 'column',
-                animation: false,
-                backgroundColor: 'rgb(255, 255, 255)'
-            },
-            title: {
-                text: {{.Title}}
-            },
-            subtitle: {
-                text: {{.Subtitle}}
-            },
-            xAxis: {
-                type: 'datetime',
-            },
-            plotOptions: {
-                column: {
-                    stacking: {{.StackingMode}},
-                }
-            },
-            yAxis: [{
-                title: {
-                    text: {{.YAxisTitle}}
-                }
-            }],
-            series: {{.Series}},
-            credits: {
-                href: "https://www.beaconcha.in",
-                text: "Source: beaconcha.in"
-            },
-        });
-    </script>
-{{end}}
-
-{{ define "css"}}
-{{end}}
-
-{{ define "content"}}
-    <div class="mb-3">
-        <div class="d-md-flex py-2 justify-content-md-between">
-            <h1 class="h4 mb-1 mb-md-0"><i class="fas fa-chart-line mr-2"></i>Ethereum 2.0 Beacon Chain Chart</h1>
-            <nav aria-label="breadcrumb">
-                <ol class="breadcrumb font-size-1 mb-0" style="padding:0; background-color:transparent;">
-                    <li class="breadcrumb-item"><a href="/charts" title="Charts">Charts</a></li>
-                    <li class="breadcrumb-item active" aria-current="page">Chart details</li>
-                </ol>
-            </nav>
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-body">
-            <div id="chart" height="600"></div>
-        </div>
-    </div>
+<script>
+Highcharts.stockChart('chart', {
+    chart: {
+        type: 'column'
+    },
+    rangeSelector: { 
+        enabled: true
+    },
+    title: {
+        text: {{.Title}}
+    },
+    subtitle: {
+        text: {{.Subtitle}}
+    },
+    plotOptions: {
+        column: {
+            stacking: {{.StackingMode}},
+        }
+    },
+    xAxis: {
+        type: 'datetime'
+    },
+    yAxis: [{
+        title: {
+            text: {{.YAxisTitle}}
+        },
+        opposite: false
+    }],
+    series: {{.Series}},
+});
+</script>
+{{end}} {{ define "css"}} {{end}} {{ define "content"}}
+<div class="mb-3">
+  <div class="d-md-flex py-2 justify-content-md-between">
+    <h1 class="h4 mb-1 mb-md-0"><i class="fas fa-chart-line mr-2"></i>Ethereum 2.0 Beacon Chain Chart</h1>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb font-size-1 mb-0" style="padding:0; background-color:transparent;">
+        <li class="breadcrumb-item"><a href="/charts" title="Charts">Charts</a></li>
+        <li class="breadcrumb-item active" aria-current="page">Chart details</li>
+      </ol>
+    </nav>
+  </div>
+</div>
+<div class="card">
+  <div class="card-body">
+    <div id="chart" height="600"></div>
+  </div>
+</div>
 {{end}}

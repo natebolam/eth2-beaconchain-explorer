@@ -35,7 +35,7 @@ func epochUpdater() {
 		err := db.DB.Get(&epoch, "SELECT COALESCE(MAX(epoch), 0) FROM epochs")
 
 		if err != nil {
-			logger.Printf("Error retrieving latest epoch from the database: %v", err)
+			logger.Printf("error retrieving latest epoch from the database: %v", err)
 		} else {
 			atomic.StoreUint64(&latestEpoch, epoch)
 			if firstRun {
@@ -90,7 +90,8 @@ func getIndexPageData() (*types.IndexPageData, error) {
 											    blocks.attesterslashingscount,
        											blocks.status
 										FROM blocks 
-										ORDER BY blocks.slot DESC LIMIT 20`)
+										WHERE blocks.slot < $1
+										ORDER BY blocks.slot DESC LIMIT 20`, utils.TimeToSlot(uint64(time.Now().Add(time.Second*10).Unix())))
 
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving index block data: %v", err)

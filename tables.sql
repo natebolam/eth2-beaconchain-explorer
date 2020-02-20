@@ -1,13 +1,23 @@
 /*
-Lookup table to store the index - pubkey association
+This table is used to store the current state (latest exported epoch) of all validators
+It also acts as a lookup-table to store the index-pubkey association
 In order to save db space we only use the unique validator index in all other tables
 In the future it is better to replace this table with an in memory cache (redis)
 */
 drop table if exists validators;
 create table validators (
-   validatorindex int not null,
-   pubkey bytea not null,
-   primary key (validatorindex)
+    validatorindex int not null,
+    pubkey bytea not null,
+    withdrawableepoch bigint not null,
+    withdrawalcredentials bytea not null,
+    balance bigint not null,
+    effectivebalance bigint not null,
+    slashed bool not null,
+    activationeligibilityepoch bigint not null,
+    activationepoch bigint not null,
+    exitepoch bigint not null,
+    lastattestationslot bigint,
+    primary key (validatorindex)
 );
 create index idx_validators_pubkey on validators (pubkey);
 
@@ -25,16 +35,21 @@ create table validator_set (
     primary key (validatorindex, epoch)
 );
 
--- drop table if exists validator_assignments;
--- create table validator_assignments (
---     epoch int not null,
---     validatorindex int not null,
---     beaconcommittees int[] not null,
---     committeeindex int not null,
---     attesterslot int not null,
---     proposerslot int not null,
---     primary key (epoch, validatorindex)
--- );
+drop table if exists validator_performance;
+create table validator_performance (
+    validatorindex int not null,
+    balance bigint not null,
+    performance1d bigint not null,
+    performance7d bigint not null,
+    performance31d bigint not null,
+    performance365d bigint not null,
+    primary key (validatorindex)
+);
+create index idx_validator_performance_balance on validator_performance (balance);
+create index idx_validator_performance_performance1d on validator_performance (performance1d);
+create index idx_validator_performance_performance7d on validator_performance (performance7d);
+create index idx_validator_performance_performance31d on validator_performance (performance31d);
+create index idx_validator_performance_performance365d on validator_performance (performance365d);
 
 drop table if exists proposal_assignments;
 create table proposal_assignments (
@@ -54,38 +69,18 @@ create table attestation_assignments (
       status int not null, /* Can be 0 = scheduled, 1 executed, 2 missed */
       primary key (epoch, validatorindex, attesterslot, committeeindex)
 );
-
-drop table if exists beacon_committees;
-create table beacon_committees (
-    epoch int not null,
-    slot int not null,
-    slotindex int not null,
-    indices int[] not null,
-    primary key (epoch, slot, slotindex)
-);
+create index idx_attestation_assignments_validatorindex on attestation_assignments (validatorindex);
 
 drop table if exists validator_balances;
 create table validator_balances (
     epoch int not null,
     validatorindex int not null,
     balance bigint not null,
+    effectivebalance bigint not null,
     primary key (validatorindex, epoch)
 );
+create index idx_validator_balances_epoch on validator_balances (epoch);
 
-drop table if exists attestationpool;
-create table attestationpool (
-     aggregationbits bytea not null,
-     custodybits bytea not null,
-     signature bytea not null,
-     slot int not null,
-     index int not null,
-     beaconblockroot bytea not null,
-     source_epoch int not null,
-     source_root bytea not null,
-     target_epoch int not null,
-     target_root bytea not null,
-     primary key (slot, index)
-);
 
 drop table if exists validatorqueue_activation;
 create table validatorqueue_activation (
@@ -165,8 +160,6 @@ drop table if exists blocks_attesterslashings;
 create table blocks_attesterslashings (
     block_slot int not null,
     block_index int not null,
-    attestation1_custodybit_0indices int[] not null,
-    attestation1_custodybit_1indices int[] not null,
     attestation1_signature bytea not null,
     attestation1_slot int not null,
     attestation1_index int not null,
@@ -175,8 +168,6 @@ create table blocks_attesterslashings (
     attestation1_source_root bytea not null,
     attestation1_target_epoch int not null,
     attestation1_target_root bytea not null,
-    attestation2_custodybit_0indices int[] not null,
-    attestation2_custodybit_1indices int[] not null,
     attestation2_signature bytea not null,
     attestation2_slot int not null,
     attestation2_index int not null,
@@ -194,7 +185,6 @@ create table blocks_attestations (
     block_index int not null,
     aggregationbits bytea not null,
     validators int[] not null,
-    custodybits bytea not null,
     signature bytea not null,
     slot int not null,
     committeeindex int not null,

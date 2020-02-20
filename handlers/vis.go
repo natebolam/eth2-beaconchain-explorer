@@ -39,7 +39,9 @@ func Vis(w http.ResponseWriter, r *http.Request) {
 	err = visTemplate.ExecuteTemplate(w, "layout", data)
 
 	if err != nil {
-		logger.Fatalf("Error executing template for %v route: %v", r.URL.String(), err)
+		logger.Errorf("error executing template for %v route: %v", r.URL.String(), err)
+		http.Error(w, "Internal server error", 503)
+		return
 	}
 }
 
@@ -63,7 +65,7 @@ func VisBlocks(w http.ResponseWriter, r *http.Request) {
 	err = db.DB.Select(&chartData, "select slot, blockroot, parentroot, proposer from blocks where slot >= $1 and status in ('1', '2') order by slot desc limit 50;", sinceSlot)
 
 	if err != nil {
-		logger.Printf("Error retrieving block tree data: %v", err)
+		logger.Errorf("error retrieving block tree data: %v", err)
 		http.Error(w, "Internal server error", 503)
 		return
 	}
@@ -82,11 +84,13 @@ func VisBlocks(w http.ResponseWriter, r *http.Request) {
 		d.Difficulty = d.Slot
 	}
 
-	logger.Printf("Returning %v blocks since %v", len(chartData), sinceSlot)
+	logger.Printf("returning %v blocks since %v", len(chartData), sinceSlot)
 
 	err = json.NewEncoder(w).Encode(chartData)
 	if err != nil {
-		logger.Fatalf("Error enconding json response for %v route: %v", r.URL.String(), err)
+		logger.Errorf("error enconding json response for %v route: %v", r.URL.String(), err)
+		http.Error(w, "Internal server error", 503)
+		return
 	}
 }
 
@@ -112,7 +116,7 @@ func VisVotes(w http.ResponseWriter, r *http.Request) {
 												order by blocks.slot desc LIMIT 10;`, sinceSlot)
 
 	if err != nil {
-		logger.Printf("Error retrieving votes tree data: %v", err)
+		logger.Errorf("error retrieving votes tree data: %v", err)
 		http.Error(w, "Internal server error", 503)
 		return
 	}
@@ -121,14 +125,14 @@ func VisVotes(w http.ResponseWriter, r *http.Request) {
 		data := &types.VotesVisChartData{}
 		err := rows.Scan(&data.Slot, &data.BlockRoot, &data.ParentRoot, &data.Validators)
 		if err != nil {
-			logger.Printf("Error scanning votes tree data: %v", err)
+			logger.Errorf("error scanning votes tree data: %v", err)
 			http.Error(w, "Internal server error", 503)
 			return
 		}
 		chartData = append(chartData, data)
 	}
 
-	logger.Printf("Returning %v entries since %v", len(chartData), sinceSlot)
+	logger.Printf("returning %v entries since %v", len(chartData), sinceSlot)
 
 	data := &types.PageData{
 		Meta: &types.Meta{
@@ -144,6 +148,8 @@ func VisVotes(w http.ResponseWriter, r *http.Request) {
 	err = visVotesTemplate.ExecuteTemplate(w, "layout", data)
 
 	if err != nil {
-		logger.Fatalf("Error executing template for %v route: %v", r.URL.String(), err)
+		logger.Errorf("error executing template for %v route: %v", r.URL.String(), err)
+		http.Error(w, "Internal server error", 503)
+		return
 	}
 }
