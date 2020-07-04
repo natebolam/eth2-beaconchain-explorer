@@ -14,13 +14,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
-	negronilogrus "github.com/meatballhat/negroni-logrus"
+
+	"github.com/gorilla/mux"
 	"github.com/phyber/negroni-gzip/gzip"
-	"github.com/sirupsen/logrus"
 	"github.com/urfave/negroni"
 	"github.com/zesik/proxyaddr"
+
+	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 		log.Fatalf("error reading config file: %v", err)
 	}
 
-	dbConn, err := sqlx.Open("postgres", fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name))
+	dbConn, err := sqlx.Open("pgx", fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", cfg.Database.Username, cfg.Database.Password, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,6 +67,10 @@ func main() {
 		var rpcClient rpc.Client
 
 		if utils.Config.Indexer.Node.Type == "prysm" {
+			if utils.Config.Indexer.Node.PageSize == 0 {
+				log.Printf("setting default rpc page size to 500")
+				utils.Config.Indexer.Node.PageSize = 500
+			}
 			rpcClient, err = rpc.NewPrysmClient(cfg.Indexer.Node.Host + ":" + cfg.Indexer.Node.Port)
 			if err != nil {
 				log.Fatal(err)
@@ -87,16 +92,14 @@ func main() {
 
 		router := mux.NewRouter()
 		router.HandleFunc("/", handlers.Index).Methods("GET")
+		router.HandleFunc("/latestState", handlers.LatestState).Methods("GET")
 		router.HandleFunc("/index/data", handlers.IndexPageData).Methods("GET")
 		router.HandleFunc("/block/{slotOrHash}", handlers.Block).Methods("GET")
 		router.HandleFunc("/blocks", handlers.Blocks).Methods("GET")
 		router.HandleFunc("/blocks/data", handlers.BlocksData).Methods("GET")
 		router.HandleFunc("/vis", handlers.Vis).Methods("GET")
 		router.HandleFunc("/charts", handlers.Charts).Methods("GET")
-		router.HandleFunc("/charts/blocks", handlers.BlocksChart).Methods("GET")
-		router.HandleFunc("/charts/validators", handlers.ActiveValidatorChart).Methods("GET")
-		router.HandleFunc("/charts/staked_ether", handlers.StakedEtherChart).Methods("GET")
-		router.HandleFunc("/charts/average_balance", handlers.AverageBalanceChart).Methods("GET")
+		router.HandleFunc("/charts/{chart}", handlers.GenericChart).Methods("GET")
 		router.HandleFunc("/vis/blocks", handlers.VisBlocks).Methods("GET")
 		router.HandleFunc("/vis/votes", handlers.VisVotes).Methods("GET")
 		router.HandleFunc("/epoch/{epoch}", handlers.Epoch).Methods("GET")
@@ -105,15 +108,25 @@ func main() {
 		router.HandleFunc("/validator/{index}", handlers.Validator).Methods("GET")
 		router.HandleFunc("/validator/{index}/proposedblocks", handlers.ValidatorProposedBlocks).Methods("GET")
 		router.HandleFunc("/validator/{index}/attestations", handlers.ValidatorAttestations).Methods("GET")
+		router.HandleFunc("/validator/{pubkey}/deposits", handlers.ValidatorDeposits).Methods("GET")
+		router.HandleFunc("/validator/{index}/slashings", handlers.ValidatorSlashings).Methods("GET")
 		router.HandleFunc("/validators", handlers.Validators).Methods("GET")
 		router.HandleFunc("/validators/data", handlers.ValidatorsData).Methods("GET")
+		router.HandleFunc("/validators/slashings", handlers.ValidatorsSlashings).Methods("GET")
+		router.HandleFunc("/validators/slashings/data", handlers.ValidatorsSlashingsData).Methods("GET")
 		router.HandleFunc("/validators/leaderboard", handlers.ValidatorsLeaderboard).Methods("GET")
 		router.HandleFunc("/validators/leaderboard/data", handlers.ValidatorsLeaderboardData).Methods("GET")
+		router.HandleFunc("/validators/eth1deposits", handlers.Eth1Deposits).Methods("GET")
+		router.HandleFunc("/validators/eth1deposits/data", handlers.Eth1DepositsData).Methods("GET")
+		router.HandleFunc("/validators/eth2deposits", handlers.Eth2Deposits).Methods("GET")
+		router.HandleFunc("/validators/eth2deposits/data", handlers.Eth2DepositsData).Methods("GET")
 		router.HandleFunc("/dashboard", handlers.Dashboard).Methods("GET")
 		router.HandleFunc("/dashboard/data/balance", handlers.DashboardDataBalance).Methods("GET")
 		router.HandleFunc("/dashboard/data/proposals", handlers.DashboardDataProposals).Methods("GET")
 		router.HandleFunc("/dashboard/data/validators", handlers.DashboardDataValidators).Methods("GET")
 		router.HandleFunc("/dashboard/data/earnings", handlers.DashboardDataEarnings).Methods("GET")
+		router.HandleFunc("/graffitiwall", handlers.Graffitiwall).Methods("GET")
+		router.HandleFunc("/calculator", handlers.StakingCalculator).Methods("GET")
 		router.HandleFunc("/search", handlers.Search).Methods("POST")
 		router.HandleFunc("/search/{type}/{search}", handlers.SearchAhead).Methods("GET")
 		router.HandleFunc("/faq", handlers.Faq).Methods("GET")
@@ -124,16 +137,16 @@ func main() {
 		n := negroni.New(negroni.NewRecovery())
 
 		// Customize the logging middleware to include a proper module entry for the frontend
-		frontendLogger := negronilogrus.NewMiddleware()
-		frontendLogger.Before = func(entry *logrus.Entry, request *http.Request, s string) *logrus.Entry {
-			entry = negronilogrus.DefaultBefore(entry, request, s)
-			return entry.WithField("module", "frontend")
-		}
-		frontendLogger.After = func(entry *logrus.Entry, writer negroni.ResponseWriter, duration time.Duration, s string) *logrus.Entry {
-			entry = negronilogrus.DefaultAfter(entry, writer, duration, s)
-			return entry.WithField("module", "frontend")
-		}
-		n.Use(frontendLogger)
+		//frontendLogger := negronilogrus.NewMiddleware()
+		//frontendLogger.Before = func(entry *logrus.Entry, request *http.Request, s string) *logrus.Entry {
+		//	entry = negronilogrus.DefaultBefore(entry, request, s)
+		//	return entry.WithField("module", "frontend")
+		//}
+		//frontendLogger.After = func(entry *logrus.Entry, writer negroni.ResponseWriter, duration time.Duration, s string) *logrus.Entry {
+		//	entry = negronilogrus.DefaultAfter(entry, writer, duration, s)
+		//	return entry.WithField("module", "frontend")
+		//}
+		//n.Use(frontendLogger)
 
 		n.Use(gzip.Gzip(gzip.DefaultCompression))
 

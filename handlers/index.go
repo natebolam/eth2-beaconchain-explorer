@@ -17,6 +17,7 @@ var indexTemplate = template.Must(template.New("index").Funcs(utils.GetTemplateF
 // Index will return the main "index" page using a go template
 func Index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
+	// indexTemplate = template.Must(template.New("index").Funcs(utils.GetTemplateFuncs()).ParseFiles("templates/layout.html", "templates/index.html"))
 
 	data := &types.PageData{
 		Meta: &types.Meta{
@@ -24,10 +25,16 @@ func Index(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "index",
-		Data:               services.LatestIndexPageData(),
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "index",
+		Data:                  services.LatestIndexPageData(),
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	err := indexTemplate.ExecuteTemplate(w, "layout", data)

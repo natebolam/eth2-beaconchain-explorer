@@ -11,7 +11,7 @@ function hideTooltip(selector, message) {
   setTimeout(function () {
     $(selector).tooltip('hide')
       .attr('data-original-title', message)
-  }, 1000);
+  }, 1000)
 }
 
 function createBlock(x, y) {
@@ -24,84 +24,31 @@ function createBlock(x, y) {
 }
 
 function appendBlocks(blocks) {
+  $(".blue-cube g.move").each(function() {
+    $(this).empty()
+  })
 
-  var use = document.createElementNS("http://www.w3.org/2000/svg","use")
-  // use.setAttributeNS(null, "style", `transform: translate(calc(${x} * var(--disperse-factor)), calc(${y} * var(--disperse-factor)));`)
-  use.setAttributeNS(null, "href", "#cube-small")
-  use.setAttributeNS(null, "x", 129)
-  use.setAttributeNS(null, "y", 56)
-  $("g.move").empty()
-
+  var cubes = document.querySelectorAll('.blue-cube g.move')
   for (var i = 0; i < blocks.length; i++) {
     var block = blocks[i];
-    block = createBlock(block[0], block[1])
-    document.querySelector('g.move').appendChild(block)
+
+    for (let i = 0; i < cubes.length; i++) {
+      var cube = cubes[i];
+      cube.appendChild(createBlock(block[0], block[1]))
+    }    
   }
-  document.querySelector('g.move').appendChild(use)
+  for (let i = 0; i < cubes.length; i++) {
+    var cube = cubes[i];
+    var use = document.createElementNS("http://www.w3.org/2000/svg","use")
+    // use.setAttributeNS(null, "style", `transform: translate(calc(${x} * var(--disperse-factor)), calc(${y} * var(--disperse-factor)));`)
+    use.setAttributeNS(null, "href", "#cube-small")
+    use.setAttributeNS(null, "x", 129)
+    use.setAttributeNS(null, "y", 56)
+    cube.appendChild(use)
+  }
 }
 
 $(document).ready(function() {
-/* 
-  [121, 48],
-  [121, 24],
-  [121, 0],
-  [100, 60],
-  [100, 36],
-  [100, 12],
-  [142, 60],
-  [142, 36],
-  [142, 12],
-  [163, 72],
-  [163, 48],
-  [163, 24],
-  [79, 72],
-  [79, 48],
-  [79, 24],
-  [121, 72],
-  [121, 48],
-  [121, 24],
-  [100, 84],
-  [100, 60],
-  [100, 36],
-  [142, 84],
-  [142, 60],
-  [142, 36],
-  [121, 96],
-  [121, 72],
-  [129, 56]
-*/
- var xBlocks = [
-  [121, 48],
-  [121, 24],
-  [121, 0],
-  [100, 60],
-  [100, 36],
-  [100, 12],
-  [142, 60],
-  [142, 36],
-  [142, 12],
-  [163, 72],
-  [163, 48],
-  [163, 24],
-  [79, 72],
-  [79, 48],
-  [79, 24],
-  [121, 72],
-  [121, 48],
-  [121, 24],
-  [100, 84],
-  [100, 60],
-  [100, 36],
-  [142, 84],
-  [142, 60],
-  [142, 36],
-  [121, 96],
-  [121, 72],
-  // [129, 56]
- ]
-
-
-
   var clipboard = new ClipboardJS('#copy-button');
 
   var copyButton = $('#copy-button')
@@ -110,7 +57,6 @@ $(document).ready(function() {
   copyIcon = $("<i class='fa fa-copy' style='width:15px'></i>")
   //'<i class="fas fa-check"></i>'
   tickIcon = $("<i class='fas fa-check' style='width:15px;'></i>")
-
 
   clipboard.on('success', function (e) {
     copyButton.empty().append(tickIcon);
@@ -161,6 +107,7 @@ $(document).ready(function() {
         targets: 0,
         data: '0',
         render: function(data, type, row, meta) {
+          if (type == 'sort' || type == 'type') return data
           return '<a href="/validator/' + data + '">0x' + data.substr(0, 8) + '...</a>'
         }
       },
@@ -168,6 +115,7 @@ $(document).ready(function() {
         targets: 1,
         data: '1',
         render: function(data, type, row, meta) {
+          if (type == 'sort' || type == 'type') return data
           return '<a href="/validator/' + data + '">' + data + '</a>'
         }
       },
@@ -175,6 +123,7 @@ $(document).ready(function() {
         targets: 2,
         data: '2',
         render: function(data, type, row, meta) {
+          if (type == 'sort' || type == 'type') return data ? data[0] : null
           return `${data[0]} (${data[1]})`
         }
       },
@@ -182,6 +131,7 @@ $(document).ready(function() {
         targets: 3,
         data: '3',
         render: function(data, type, row, meta) {
+          if (type == 'sort' || type == 'type') return data ? data[0] : -1
           var d = data.split('_')
           var s = d[0].charAt(0).toUpperCase() + d[0].slice(1)
           if (d[1] === 'offline') 
@@ -195,8 +145,8 @@ $(document).ready(function() {
         targets: 4,
         data: '4',
         render: function(data, type, row, meta) {
-          if (data === null) 
-            return '-'
+          if (type == 'sort' || type == 'type') return data ? data[0] : null
+          if (data === null) return '-'
           return `<span data-toggle="tooltip" data-placement="top" title="${moment.unix(data[1]).format()}">${moment.unix(data[1]).fromNow()} (<a href="/epoch/${data[0]}">Epoch ${data[0]}</a>)</span>`
         }
       },
@@ -204,8 +154,8 @@ $(document).ready(function() {
         targets: 5,
         data: '5',
         render: function(data, type, row, meta) {
-          if (data === null) 
-            return '-'
+          if (type == 'sort' || type == 'type') return data ? data[0] : null
+          if (data === null) return '-'
           return `<span data-toggle="tooltip" data-placement="top" title="${moment.unix(data[1]).format()}">${moment.unix(data[1]).fromNow()} (<a href="/epoch/${data[0]}">Epoch ${data[0]}</a>)</span>`
         }
       },
@@ -213,8 +163,8 @@ $(document).ready(function() {
         targets: 6,
         data: '6',
         render: function(data, type, row, meta) {
-          if (data === null) 
-            return '-'
+          if (type == 'sort' || type == 'type') return data ? data[0] : null
+          if (data === null) return '-'
           return `<span data-toggle="tooltip" data-placement="top" title="${moment.unix(data[1]).format()}">${moment.unix(data[1]).fromNow()} (<a href="/epoch/${data[0]}">Epoch ${data[0]}</a>)</span>`
         }
       },
@@ -222,8 +172,8 @@ $(document).ready(function() {
         targets: 7,
         data: '7',
         render: function(data, type, row, meta) {
-          if (data === null)
-            return 'No Attestation found'
+          if (type == 'sort' || type == 'type') return data ? data[0] : null
+          if (data === null) return 'No Attestation found'
           return `<span data-toggle="tooltip" data-placement="top" title="${moment.unix(data[1]).format()}">${moment.unix(data[1]).fromNow()} (<a href="/block/${data[0]}">Block ${data[0]}</a>)</span>`
         }
       },
@@ -231,12 +181,12 @@ $(document).ready(function() {
         targets: 8,
         data: '8',
         render: function(data, type, row, meta) {
+          if (type == 'sort' || type == 'type') return data ? data[0] + data[1] : null
           return `<span data-toggle="tooltip" data-placement="top" title="${data[0]} executed / ${data[1]} missed"><span class="text-success">${data[0]}</span> / <span class="text-danger">${data[1]}</span></span>`
         }
       }
     ]
   })
-
 
   var bhValidators = new Bloodhound({
     datumTokenizer: Bloodhound.tokenizers.whitespace,
@@ -245,7 +195,29 @@ $(document).ready(function() {
       return obj.index
     },
     remote: {
-      url: '/search/validators/%QUERY',
+      url: '/search/indexed_validators/%QUERY',
+      wildcard: '%QUERY'
+    }
+  })
+  var bhEth1Addresses = new Bloodhound({
+    datumTokenizer: Bloodhound.tokenizers.whitespace,
+    queryTokenizer: Bloodhound.tokenizers.whitespace,
+    identify: function(obj) {
+      return obj.eth1_address
+    },
+    remote: {
+      url: '/search/indexed_validators_by_eth1_addresses/%QUERY',
+      wildcard: '%QUERY'
+    }
+  })
+  var bhGraffiti = new Bloodhound({
+    datumTokenizer: Bloodhound.tokenizers.whitespace,
+    queryTokenizer: Bloodhound.tokenizers.whitespace,
+    identify: function(obj) {
+      return obj.graffiti
+    },
+    remote: {
+      url: '/search/indexed_validators_by_graffiti/%QUERY',
       wildcard: '%QUERY'
     }
   })
@@ -263,8 +235,39 @@ $(document).ready(function() {
       source: bhValidators,
       display: 'index',
       templates: {
+        header: '<h3>Validators</h3>',
         suggestion: function(data) {
-          return `<div>${data.index}: ${data.pubkey.substring(0, 16)}…</div>`
+          return `<div class="text-monospace">${data.index}: ${data.pubkey.substring(0, 16)}…</div>`
+        }
+      }
+    },
+    {
+      limit: 5,
+      name: 'addresses',
+      source: bhEth1Addresses,
+      display: 'address',
+      templates: {
+        header: '<h3>Validators by ETH1 Addresses</h3>',
+        suggestion: function(data) {
+          if (data.validator_indices.length>100) {
+            return `<div class="text-monospace">0x${data.eth1_address.substring(0, 16)}…: 100+</div>`
+          }
+          return `<div class="text-monospace">0x${data.eth1_address.substring(0, 16)}…: ${data.validator_indices.length}</div>`
+        }
+      }
+    },
+    {
+      limit: 5,
+      name: 'graffiti',
+      source: bhGraffiti,
+      display: 'graffiti',
+      templates: {
+        header: '<h3>Validators by Graffiti</h3>',
+        suggestion: function(data) {
+          if (data.validator_indices.length>100) {
+            return `<div class="text-monospace">0x${data.graffiti.substring(0, 32)}…: 100+</div>`
+          }
+          return `<div class="text-monospace">0x${data.graffiti.substring(0, 32)}…: ${data.validator_indices.length}</div>`
         }
       }
     }
@@ -278,7 +281,11 @@ $(document).ready(function() {
     $('.tt-suggestion').first().addClass('tt-cursor')
   })
   $('.typeahead-dashboard').on('typeahead:select', function(ev, sug) {
-    addValidator(sug.index)
+    if (sug.validator_indices) {
+      addValidators(sug.validator_indices)
+    } else {
+      addValidator(sug.index)
+    }
     $('.typeahead-dashboard').typeahead('val', '')
   })
   $('#pending').on('click', 'button', function() {
@@ -358,6 +365,8 @@ $(document).ready(function() {
       var validatorsStr = localStorage.getItem('dashboard_validators')
       if (validatorsStr) {
         state.validators = JSON.parse(validatorsStr)
+        state.validators = state.validators.filter((v, i) => state.validators.indexOf(v) === i)
+        state.validators.sort(sortValidators)
       } else {
         state.validators = []
       }
@@ -366,13 +375,43 @@ $(document).ready(function() {
     state.validators = validatorsStr.split(',')
     state.validators = state.validators.filter((v, i) => state.validators.indexOf(v) === i)
     state.validators.sort(sortValidators)
+    if (state.validators.length > 100) {
+      state.validators = state.validators.slice(0,100)
+      console.log("100 validators limit reached")
+      alert('You can not add more than 100 validators to your dashboard')
+    }
+  }
+
+  function addValidators(indices) {
+    var limitReached = false
+    indicesLoop:
+    for (var j = 0; j < indices.length; j++) {
+      if (state.validators.length >= 100) {
+        limitReached = true
+        break indicesLoop
+      }
+      var index = indices[j]+"" // make sure index is string
+      for (var i = 0; i < state.validators.length; i++) {
+        if (state.validators[i] === index)
+          continue indicesLoop
+      }
+      state.validators.push(index)
+    }
+    state.validators.sort(sortValidators)
+    renderSelectedValidators()
+    updateState()
+    if (limitReached) {
+      console.log("100 validators limit reached")
+      alert('You can not add more than 100 validators to your dashboard')
+    }
   }
 
   function addValidator(index) {
-    if (state.validators.length >= 100) {
+    if (state.validators.length > 100) {
       alert('Too much validators, you can not add more than 100 validators to your dashboard!')
       return
     }
+    index = index+"" // make sure index is string
     for (var i = 0; i < state.validators.length; i++) {
       if (state.validators[i] === index) return
     }
@@ -387,8 +426,16 @@ $(document).ready(function() {
       if (state.validators[i] === index) {
         state.validators.splice(i, 1)
         state.validators.sort(sortValidators)
-        renderSelectedValidators()
-        updateState()
+        //removed last validator
+        if(state.validators.length === 0) {
+          state = setInitialState()
+          localStorage.removeItem('dashboard_validators')
+          window.location = "/dashboard"
+          return
+        } else {
+          renderSelectedValidators()
+          updateState()
+        }
         return
       }
     }
@@ -435,12 +482,12 @@ $(document).ready(function() {
     var newUrl = window.location.pathname + qryStr
     window.history.pushState(null, 'Dashboard', newUrl)
     var t0 = Date.now()
-    if(state.validators && state.validators.length) {
-      if(state.validators.length >= 9) {
-        appendBlocks(xBlocks)
-      } else {
-        appendBlocks(xBlocks.slice(0, state.validators.length * 3 - 1))
-      }
+    if (state.validators && state.validators.length) {
+      // if(state.validators.length >= 9) {
+      //   appendBlocks(xBlocks)
+      // } else {
+      //   appendBlocks(xBlocks.slice(0, state.validators.length * 3 - 1))
+      // }
       document.querySelector('#copy-button').style.visibility = "visible"
       document.querySelector('#clear-search').style.visibility = "visible"
 
@@ -460,17 +507,11 @@ $(document).ready(function() {
           addChange("#earnings-week-header", lastWeek)
           addChange("#earnings-month-header", lastMonth)
           addChange("#earnings-total-header", total)
-  
-  
-  
+
           document.querySelector('#earnings-day').innerText = lastDay || '0.000'
           document.querySelector('#earnings-week').innerText = lastWeek || '0.000'
           document.querySelector('#earnings-month').innerText = lastMonth || '0.000'
           document.querySelector('#earnings-total').innerText = total || '0.000'
-  //         document.querySelector('#stats-earnings .stats-box-body').innerText = `total: ${(result.total/1e9).toFixed(4)} ETH
-  // 1 day: ${(result.lastDay/1e9).toFixed(4)} ETH
-  // 7 days: ${(result.lastWeek/1e9).toFixed(4)} ETH
-  // 31 days: ${(result.lastMonth/1e9).toFixed(4)} ETH`
         }
       })
       $.ajax({
@@ -484,8 +525,8 @@ $(document).ready(function() {
           }
           // pubkey, idx, currbal, effbal, slashed, acteligepoch, actepoch, exitepoch
           // 0:pubkey, 1:idx, 2:[currbal,effbal], 3:state, 4:[actepoch,acttime], 5:[exit,exittime], 6:[wd,wdt], 7:[lasta,lastat], 8:[exprop,misprop]
-          console.log(`latestEpoch: ${result.latestEpoch}`)
-          var latestEpoch = result.latestEpoch
+          // console.log(`latestEpoch: ${result.latestEpoch}`)
+          // var latestEpoch = result.latestEpoch
           state.validatorsCount.pending = 0
           state.validatorsCount.active_online = 0
           state.validatorsCount.active_offline = 0
@@ -493,7 +534,8 @@ $(document).ready(function() {
           state.validatorsCount.slashing_offline = 0
           state.validatorsCount.exiting_online = 0
           state.validatorsCount.exiting_offline = 0
-          state.validatorsCount.exited  = 0
+          state.validatorsCount.exited = 0
+          state.validatorsCount.slashed = 0
   
           for (var i=0; i<result.data.length; i++) {
             var v = result.data[i]
@@ -505,22 +547,15 @@ $(document).ready(function() {
             if (el) el.dataset.state = vState
           }
           validatorsDataTable.clear()
-          console.log('search',validatorsDataTable.columns().search())
+
           validatorsDataTable.rows.add(result.data).draw()
   
           validatorsDataTable.column(6).visible(false)
-  
+
           requestAnimationFrame(()=>{validatorsDataTable.columns.adjust().responsive.recalc()})
-  
-          // document.getElementById('stats').style.display = 'flex'
-          // document.querySelector('#stats-validators-status').innerText = `showing ${state.validatorsCount.pending} pending, ${state.validatorsCount.active_online} active, `
-  //         `pending:  ${state.validatorsCount.pending}
-  // active:   ${state.validatorsCount.active_online} / ${state.validatorsCount.active_offline}
-  // slashing: ${state.validatorsCount.slashing_online} / ${state.validatorsCount.slashing_offline}
-  // exiting:  ${state.validatorsCount.exiting_online} / ${state.validatorsCount.exiting_offline}
-  // exited:   ${state.validatorsCount.exited}`
-  
+
           document.getElementById('validators-table-holder').style.display = 'block'
+
           renderDashboardInfo()
         }
       })
@@ -542,6 +577,21 @@ $(document).ready(function() {
     renderSelectedValidators()
     updateState()
   }
+  window.addEventListener('storage', function(e) {
+      var validatorsStr = localStorage.getItem('dashboard_validators')
+      if (JSON.stringify(state.validators) === validatorsStr) {
+        return
+      }
+      if (validatorsStr) {
+        state.validators = JSON.parse(validatorsStr)
+      } else {
+        state.validators = []
+      }
+      state.validators = state.validators.filter((v, i) => state.validators.indexOf(v) === i)
+      state.validators.sort(sortValidators)
+      renderSelectedValidators()
+      updateState()
+  })
 
   function renderCharts() {
     var t0 = Date.now()
@@ -550,7 +600,7 @@ $(document).ready(function() {
     //   return
     // }
     document.getElementById('chart-holder').style.display = 'flex'
-    if(state.validators && state.validators.length) {
+    if (state.validators && state.validators.length) {
       var qryStr = '?validators=' + state.validators.join(',')
       $.ajax({
         url: '/dashboard/data/balance' + qryStr,
@@ -565,7 +615,7 @@ $(document).ready(function() {
             validatorCount[i] = [res[0], res[1]]
             balance[i] = [res[0], res[2]]
             effectiveBalance[i] = [res[0], res[3]]
-            utilization[i] = [res[0], res[3] / (res[1] * 3.2)]
+            utilization[i] = [res[0], res[3] / (res[1] * 32)]
           }
   
           var t2 = Date.now()
@@ -591,7 +641,7 @@ $(document).ready(function() {
   }
 })
 
-function createBalanceChart(effective, balance, utilization) {
+function createBalanceChart(effective, balance, utilization, missedAttestations) {
   Highcharts.stockChart('balance-chart', {
     exporting: {
       scale: 1
@@ -610,7 +660,22 @@ function createBalanceChart(effective, balance, utilization) {
     },
     xAxis: {
       type: 'datetime',
-      range: 7 * 24 * 60 * 60 * 1000
+      range: 7 * 24 * 60 * 60 * 1000,
+      labels: {
+        formatter: function(){
+          var epoch = timeToEpoch(this.value)
+          var orig = this.axis.defaultLabelFormatter.call(this)
+          return `${orig}<br/>Epoch ${epoch}`
+        }
+      }
+    },
+    tooltip: {
+      formatter: function(tooltip) {
+        var orig = tooltip.defaultFormatter.call(this, tooltip)
+        var epoch = timeToEpoch(this.x)
+        orig[0] = `${orig[0]}<span style="font-size:10px">Epoch ${epoch}</span>`
+        return orig
+      }
     },
     yAxis: [
       {
@@ -665,9 +730,14 @@ function createBalanceChart(effective, balance, utilization) {
 }
 
 function createProposedChart(data) {
-  var proposed = data.map(d => [d.Day * 1000, d.Proposed])
-  var missed = data.map(d => [d.Day * 1000, d.Missed])
-  var orphaned = data.map(d => [d.Day * 1000, d.Orphaned])
+  var proposed = []
+  var missed = []
+  var orphaned = []
+  data.map(d=>{
+    if (d[1] == 1) proposed.push([d[0]*1000,1])
+    else if (d[1] == 2) missed.push([d[0]*1000,1])
+    else if (d[1] == 3) orphaned.push([d[0]*1000,1])
+  })
   Highcharts.stockChart('proposed-chart', {
     chart: {
       type: 'column',
@@ -682,7 +752,6 @@ function createProposedChart(data) {
     xAxis: {
       lineWidth: 0,
       tickColor: '#e5e1e1',
-      range: 7 * 24 * 3600 * 1000
     },
     yAxis: [
       {

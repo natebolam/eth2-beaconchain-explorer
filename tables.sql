@@ -107,6 +107,7 @@ create table epochs (
     voluntaryexitscount int not null,
     validatorscount int not null,
     averagevalidatorbalance bigint not null,
+    totalvalidatorbalance bigint not null,
     finalized bool,
     eligibleether bigint,
     globalparticipationrate float,
@@ -122,11 +123,12 @@ create table blocks (
     parentroot bytea not null,
     stateroot bytea not null,
     signature bytea not null,
-    randaoreveal bytea not null,
-    graffiti bytea not null,
-    eth1data_depositroot bytea not null,
+    randaoreveal bytea,
+    graffiti bytea,
+    graffiti_text text null,
+    eth1data_depositroot bytea ,
     eth1data_depositcount int not null,
-    eth1data_blockhash bytea not null,
+    eth1data_blockhash bytea,
     proposerslashingscount int not null,
     attesterslashingscount int not null,
     attestationscount int not null,
@@ -143,12 +145,12 @@ create table blocks_proposerslashings (
     block_slot int not null,
     block_index int not null,
     proposerindex int not null,
-    header1_slot int not null,
+    header1_slot bigint not null,
     header1_parentroot bytea not null,
     header1_stateroot bytea not null,
     header1_bodyroot bytea not null,
     header1_signature bytea not null,
-    header2_slot int not null,
+    header2_slot bigint not null,
     header2_parentroot bytea not null,
     header2_stateroot bytea not null,
     header2_bodyroot bytea not null,
@@ -160,16 +162,18 @@ drop table if exists blocks_attesterslashings;
 create table blocks_attesterslashings (
     block_slot int not null,
     block_index int not null,
+    attestation1_indices integer[] not null,
     attestation1_signature bytea not null,
-    attestation1_slot int not null,
+    attestation1_slot bigint not null,
     attestation1_index int not null,
     attestation1_beaconblockroot bytea not null,
     attestation1_source_epoch int not null,
     attestation1_source_root bytea not null,
     attestation1_target_epoch int not null,
     attestation1_target_root bytea not null,
+    attestation2_indices integer[] not null,
     attestation2_signature bytea not null,
-    attestation2_slot int not null,
+    attestation2_slot bigint not null,
     attestation2_index int not null,
     attestation2_beaconblockroot bytea not null,
     attestation2_source_epoch int not null,
@@ -220,3 +224,42 @@ create table blocks_voluntaryexits (
    signature bytea not null,
    primary key (block_slot, block_index)
 );
+
+drop table if exists network_liveness;
+create table network_liveness (
+    ts timestamp without time zone,
+    headepoch int not null,
+    finalizedepoch int not null,
+    justifiedepoch int not null,
+    previousjustifiedepoch int not null,
+    primary key (ts)
+);
+
+drop table if exists graffitiwall;
+create table graffitiwall (
+    x int not null,
+    y int not null,
+    color text not null,
+    slot int not null,
+    validator int not null,
+    primary key (x,y)
+);
+
+drop table if exists eth1_deposits;
+create table eth1_deposits (
+    tx_hash bytea not null,
+    tx_input bytea not null,
+    tx_index int not null,
+    block_number int not null,
+    block_ts timestamp without time zone not null,
+    from_address bytea not null,
+    publickey bytea not null,
+    withdrawal_credentials bytea not null,
+    amount bigint not null,
+    signature bytea not null,
+    merkletree_index bytea not null,
+    removed bool not null,
+    valid_signature bool not null,
+    primary key (tx_hash)
+);
+create index idx_eth1_deposits on eth1_deposits (publickey);

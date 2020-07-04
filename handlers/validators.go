@@ -34,13 +34,7 @@ func Validators(w http.ResponseWriter, r *http.Request) {
 
 	latestEpoch := services.LatestEpoch()
 
-	var firstSlotOfPreviousEpoch uint64
-	if latestEpoch < 1 {
-		firstSlotOfPreviousEpoch = 0
-	} else {
-		firstSlotOfPreviousEpoch = (latestEpoch - 1) * utils.Config.Chain.SlotsPerEpoch
-	}
-
+	validatorOnlineThresholdSlot := GetValidatorOnlineThresholdSlot()
 	for _, validator := range validators {
 		validatorsPageData.TotalCount++
 		if latestEpoch > validator.ExitEpoch {
@@ -49,14 +43,14 @@ func Validators(w http.ResponseWriter, r *http.Request) {
 			validatorsPageData.PendingCount++
 		} else if validator.Slashed {
 			// offline validators did not attest in the last 2 epochs (and are active for >1 epochs)
-			if validator.ActivationEpoch < latestEpoch && (validator.LastAttestationSlot == nil || uint64(*validator.LastAttestationSlot) < firstSlotOfPreviousEpoch) {
+			if validator.ActivationEpoch < latestEpoch && (validator.LastAttestationSlot == nil || uint64(*validator.LastAttestationSlot) < validatorOnlineThresholdSlot) {
 				validatorsPageData.SlashingOfflineCount++
 			} else {
 				validatorsPageData.SlashingOnlineCount++
 			}
 		} else {
 			// offline validators did not attest in the last 2 epochs (and are active for >1 epochs)
-			if validator.ActivationEpoch < latestEpoch && (validator.LastAttestationSlot == nil || uint64(*validator.LastAttestationSlot) < firstSlotOfPreviousEpoch) {
+			if validator.ActivationEpoch < latestEpoch && (validator.LastAttestationSlot == nil || uint64(*validator.LastAttestationSlot) < validatorOnlineThresholdSlot) {
 				validatorsPageData.ActiveOfflineCount++
 			} else {
 				validatorsPageData.ActiveOnlineCount++
@@ -73,10 +67,16 @@ func Validators(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/validators",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "validators",
-		Data:               validatorsPageData,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "validators",
+		Data:                  validatorsPageData,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	err = validatorsTemplate.ExecuteTemplate(w, "layout", data)
@@ -123,6 +123,8 @@ func parseValidatorsDataQueryParams(r *http.Request) (*ValidatorsDataQueryParams
 		qryStateFilter = "AND a.state = 'slashing_online'"
 	case "slashing_offline":
 		qryStateFilter = "AND a.state = 'slashing_offline'"
+	case "slashed":
+		qryStateFilter = "AND a.state = 'slashed'"
 	case "exiting":
 		qryStateFilter = "AND a.state LIKE 'exiting%'"
 	case "exiting_online":
@@ -213,8 +215,7 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var totalCount uint64
-	err = db.DB.Get(&totalCount, `SELECT COUNT(*) FROM validators`)
+	totalCount, err := db.GetTotalValidatorsCount()
 	if err != nil {
 		logger.Errorf("error retrieving ejected validator count: %v", err)
 		http.Error(w, "Internal server error", 503)
@@ -222,14 +223,16 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lastestEpoch := services.LatestEpoch()
-	var firstSlotOfPreviousEpoch uint64
-	if lastestEpoch < 1 {
-		firstSlotOfPreviousEpoch = 0
-	} else {
-		firstSlotOfPreviousEpoch = (lastestEpoch - 1) * utils.Config.Chain.SlotsPerEpoch
-	}
+	validatorOnlineThresholdSlot := GetValidatorOnlineThresholdSlot()
 
 	qry := fmt.Sprintf(`
+		WITH
+			proposals AS (
+				SELECT validatorindex, pa.status, count(*)
+				FROM proposal_assignments pa
+				INNER JOIN blocks b ON pa.proposerslot = b.slot AND b.status <> '3'
+				GROUP BY validatorindex, pa.status
+			)
 		SELECT
 			validators.validatorindex,
 			validators.pubkey,
@@ -241,41 +244,31 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 			validators.exitepoch,
 			validators.lastattestationslot,
 			a.state,
-			COALESCE(p1.c,0) as executedproposals,
-			COALESCE(p2.c,0) as missedproposals
+			COALESCE(p1.count,0) AS executedproposals,
+			COALESCE(p2.count,0) AS missedproposals
 		FROM validators
 		INNER JOIN (
 			SELECT validatorindex,
 			CASE 
-				WHEN exitepoch <= $1 then 'exited'
-				WHEN activationepoch > $1 then 'pending'
-				WHEN slashed and activationepoch < $1 and (lastattestationslot < $2 OR lastattestationslot is null) then 'slashing_offline'
-				WHEN slashed then 'slashing_online'
-				WHEN activationepoch < $1 and (lastattestationslot < $2 OR lastattestationslot is null) then 'active_offline' 
+				WHEN exitepoch <= $1 THEN 'exited'
+				WHEN activationepoch > $1 THEN 'pending'
+				WHEN slashed AND activationepoch < $1 AND (lastattestationslot < $2 OR lastattestationslot IS NULL) THEN 'slashing_offline'
+				WHEN slashed THEN 'slashing_online'
+				WHEN activationepoch < $1 AND (lastattestationslot < $2 OR lastattestationslot IS NULL) THEN 'active_offline' 
 				ELSE 'active_online'
 			END AS state
 			FROM validators
 		) a ON a.validatorindex = validators.validatorindex
-		LEFT JOIN (
-			select validatorindex, count(*) as c 
-			from proposal_assignments
-			where status = 1
-			group by validatorindex
-		) p1 ON validators.validatorindex = p1.validatorindex
-		LEFT JOIN (
-			select validatorindex, count(*) as c 
-			from proposal_assignments
-			where status = 2
-			group by validatorindex
-		) p2 ON validators.validatorindex = p2.validatorindex
-		WHERE (encode(validators.pubkey::bytea, 'hex') LIKE $3
+		LEFT JOIN proposals p1 ON validators.validatorindex = p1.validatorindex AND p1.status = 1
+		LEFT JOIN proposals p2 ON validators.validatorindex = p2.validatorindex AND p2.status = 2
+		WHERE (ENCODE(validators.pubkey::bytea, 'hex') LIKE $3
 			OR CAST(validators.validatorindex AS text) LIKE $3)
 		%s
 		ORDER BY %s %s
 		LIMIT $4 OFFSET $5`, dataQuery.StateFilter, dataQuery.OrderBy, dataQuery.OrderDir)
 
 	var validators []*types.ValidatorsPageDataValidators
-	err = db.DB.Select(&validators, qry, lastestEpoch, firstSlotOfPreviousEpoch, "%"+dataQuery.Search+"%", dataQuery.Length, dataQuery.Start)
+	err = db.DB.Select(&validators, qry, lastestEpoch, validatorOnlineThresholdSlot, "%"+dataQuery.Search+"%", dataQuery.Length, dataQuery.Start)
 	if err != nil {
 		logger.Errorf("error retrieving validators data: %v", err)
 		http.Error(w, "Internal server error", 503)
@@ -288,8 +281,6 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%x", v.PublicKey),
 			fmt.Sprintf("%v", v.ValidatorIndex),
 			[]interface{}{
-				// utils.FormatBalance(v.CurrentBalance),
-				// utils.FormatBalance(v.EffectiveBalance),
 				fmt.Sprintf("%.4f ETH", float64(v.CurrentBalance)/float64(1e9)),
 				fmt.Sprintf("%.1f ETH", float64(v.EffectiveBalance)/float64(1e9)),
 			},

@@ -14,30 +14,86 @@ import (
 )
 
 var latestEpoch uint64
+var latestFinalizedEpoch uint64
+var latestSlot uint64
+var latestProposedSlot uint64
 var indexPageData atomic.Value
+var chartsPageData atomic.Value
 var ready = sync.WaitGroup{}
 
 var logger = logrus.New().WithField("module", "services")
 
 // Init will initialize the services
 func Init() {
-	ready.Add(2)
+	ready.Add(4)
 	go epochUpdater()
+	go slotUpdater()
+	go latestProposedSlotUpdater()
 	go indexPageDataUpdater()
 	ready.Wait()
+
+	go chartsPageDataUpdater()
 }
 
 func epochUpdater() {
 	firstRun := true
 
 	for true {
-		var epoch uint64
-		err := db.DB.Get(&epoch, "SELECT COALESCE(MAX(epoch), 0) FROM epochs")
 
+		var latestFinalized uint64
+		err := db.DB.Get(&latestFinalized, "SELECT COALESCE(MAX(epoch), 0) FROM epochs where finalized is true")
 		if err != nil {
-			logger.Printf("error retrieving latest epoch from the database: %v", err)
+			logger.Errorf("error retrieving latest finalized epoch from the database: %v", err)
+		} else {
+			atomic.StoreUint64(&latestFinalizedEpoch, latestFinalized)
+		}
+
+		var epoch uint64
+		err = db.DB.Get(&epoch, "SELECT COALESCE(MAX(epoch), 0) FROM epochs")
+		if err != nil {
+			logger.Errorf("error retrieving latest epoch from the database: %v", err)
 		} else {
 			atomic.StoreUint64(&latestEpoch, epoch)
+			if firstRun {
+				ready.Done()
+				firstRun = false
+			}
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func slotUpdater() {
+	firstRun := true
+
+	for true {
+		var slot uint64
+		err := db.DB.Get(&slot, "SELECT COALESCE(MAX(slot), 0) FROM blocks where slot < $1", utils.TimeToSlot(uint64(time.Now().Add(time.Second*10).Unix())))
+
+		if err != nil {
+			logger.Errorf("error retrieving latest slot from the database: %v", err)
+		} else {
+			atomic.StoreUint64(&latestSlot, slot)
+			if firstRun {
+				ready.Done()
+				firstRun = false
+			}
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func latestProposedSlotUpdater() {
+	firstRun := true
+
+	for true {
+		var slot uint64
+		err := db.DB.Get(&slot, "SELECT COALESCE(MAX(slot), 0) FROM blocks WHERE status = '1'")
+
+		if err != nil {
+			logger.Errorf("error retrieving latest proposed slot from the database: %v", err)
+		} else {
+			atomic.StoreUint64(&latestProposedSlot, slot)
 			if firstRun {
 				ready.Done()
 				firstRun = false
@@ -71,28 +127,36 @@ func getIndexPageData() (*types.IndexPageData, error) {
 
 	var epoch uint64
 	err := db.DB.Get(&epoch, "SELECT COALESCE(MAX(epoch), 0) FROM epochs")
-
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving latest epoch from the database: %v", err)
 	}
+	data.CurrentEpoch = epoch
+
+	cutoffSlot := utils.TimeToSlot(uint64(time.Now().Add(time.Second * 10).Unix()))
+
+	// If we are before the genesis block show the first 20 slots by default
+	startSlotTime := utils.SlotToTime(0)
+	if startSlotTime.After(time.Now()) {
+		cutoffSlot = 20
+	}
 
 	var blocks []*types.IndexPageDataBlocks
-
-	err = db.DB.Select(&blocks, `SELECT blocks.epoch, 
-											    blocks.slot, 
-											    blocks.proposer, 
-											    blocks.blockroot, 
-											    blocks.parentroot, 
-											    blocks.attestationscount, 
-											    blocks.depositscount, 
-											    blocks.voluntaryexitscount, 
-											    blocks.proposerslashingscount, 
-											    blocks.attesterslashingscount,
-       											blocks.status
-										FROM blocks 
-										WHERE blocks.slot < $1
-										ORDER BY blocks.slot DESC LIMIT 20`, utils.TimeToSlot(uint64(time.Now().Add(time.Second*10).Unix())))
-
+	err = db.DB.Select(&blocks, `
+		SELECT
+			blocks.epoch,
+			blocks.slot,
+			blocks.proposer,
+			blocks.blockroot,
+			blocks.parentroot,
+			blocks.attestationscount,
+			blocks.depositscount,
+			blocks.voluntaryexitscount,
+			blocks.proposerslashingscount,
+			blocks.attesterslashingscount,
+			blocks.status
+		FROM blocks 
+		WHERE blocks.slot < $1
+		ORDER BY blocks.slot DESC LIMIT 20`, cutoffSlot)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving index block data: %v", err)
 	}
@@ -127,7 +191,7 @@ func getIndexPageData() (*types.IndexPageData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving validator balance: %v", err)
 	}
-	data.AverageBalance = utils.FormatBalance(uint64(averageBalance))
+	data.AverageBalance = string(utils.FormatBalance(uint64(averageBalance)))
 
 	var epochHistory []*types.IndexPageEpochHistory
 	err = db.DB.Select(&epochHistory, "SELECT epoch, eligibleether, validatorscount, finalized FROM epochs WHERE epoch < $1 ORDER BY epoch", epoch)
@@ -136,17 +200,15 @@ func getIndexPageData() (*types.IndexPageData, error) {
 	}
 
 	if len(epochHistory) > 0 {
-		data.CurrentEpoch = epochHistory[len(epochHistory)-1].Epoch
-
 		for i := len(epochHistory) - 1; i >= 0; i-- {
 			if epochHistory[i].Finalized {
 				data.CurrentFinalizedEpoch = epochHistory[i].Epoch
-				data.FinalityDelay = data.CurrentEpoch - data.CurrentFinalizedEpoch
+				data.FinalityDelay = data.CurrentEpoch - epoch
 				break
 			}
 		}
 
-		data.StakedEther = utils.FormatBalance(epochHistory[len(epochHistory)-1].EligibleEther)
+		data.StakedEther = string(utils.FormatBalance(epochHistory[len(epochHistory)-1].EligibleEther))
 		data.ActiveValidators = epochHistory[len(epochHistory)-1].ValidatorsCount
 	}
 
@@ -167,9 +229,41 @@ func LatestEpoch() uint64 {
 	return atomic.LoadUint64(&latestEpoch)
 }
 
+// LatestFinalizedEpoch will return the most recent epoch that has been finalized.
+func LatestFinalizedEpoch() uint64 {
+	return atomic.LoadUint64(&latestFinalizedEpoch)
+}
+
+// LatestSlot will return the latest slot
+func LatestSlot() uint64 {
+	return atomic.LoadUint64(&latestSlot)
+}
+
+//FinalizationDelay will return the current Finalization Delay
+func FinalizationDelay() uint64 {
+	return LatestEpoch() - LatestFinalizedEpoch()
+}
+
+// LatestProposedSlot will return the latest proposed slot
+func LatestProposedSlot() uint64 {
+	return atomic.LoadUint64(&latestProposedSlot)
+}
+
 // LatestIndexPageData returns the latest index page data
 func LatestIndexPageData() *types.IndexPageData {
 	return indexPageData.Load().(*types.IndexPageData)
+}
+
+// LatestState returns statistics about the current eth2 state
+func LatestState() *types.LatestState {
+	data := &types.LatestState{}
+	data.CurrentEpoch = LatestEpoch()
+	data.CurrentSlot = LatestSlot()
+	data.CurrentFinalizedEpoch = LatestFinalizedEpoch()
+	data.LastProposedSlot = atomic.LoadUint64(&latestProposedSlot)
+	data.FinalityDelay = data.CurrentEpoch - data.CurrentFinalizedEpoch
+	data.IsSyncing = IsSyncing()
+	return data
 }
 
 // IsSyncing returns true if the chain is still syncing

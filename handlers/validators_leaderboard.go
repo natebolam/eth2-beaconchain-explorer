@@ -17,7 +17,7 @@ import (
 
 var validatorsLeaderboardTemplate = template.Must(template.New("validators").Funcs(utils.GetTemplateFuncs()).ParseFiles("templates/layout.html", "templates/validators_leaderboard.html"))
 
-// Validators returns the validators using a go template
+// ValidatorsLeaderboard returns the validator-leaderboard using a go template
 func ValidatorsLeaderboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
@@ -27,10 +27,16 @@ func ValidatorsLeaderboard(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/validators/leaderboard",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "validators",
-		Data:               nil,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "validators",
+		Data:                  nil,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	err := validatorsLeaderboardTemplate.ExecuteTemplate(w, "layout", data)
@@ -42,7 +48,7 @@ func ValidatorsLeaderboard(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ValidatorAttestations returns a validators attestations in json
+// ValidatorsLeaderboardData returns the leaderboard of validators according to their income in json
 func ValidatorsLeaderboardData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -102,16 +108,19 @@ func ValidatorsLeaderboardData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var performanceData []*types.ValidatorPerformance
-	err = db.DB.Select(&performanceData, `SELECT * FROM (SELECT 
-											   			ROW_NUMBER() OVER (ORDER BY `+orderBy+` DESC) AS rank,
-											   			validator_performance.*,
-											   			validators.pubkey 
-													FROM validator_performance 
-													LEFT JOIN validators ON validators.validatorindex = validator_performance.validatorindex
-													ORDER BY `+orderBy+` `+orderDir+`) AS a
-													WHERE (encode(a.pubkey::bytea, 'hex') LIKE $3
-														OR CAST(a.validatorindex AS text) LIKE $3)
-													LIMIT $1 OFFSET $2`, length, start, "%"+search+"%")
+	err = db.DB.Select(&performanceData, `
+		SELECT * FROM (
+			SELECT 
+				ROW_NUMBER() OVER (ORDER BY `+orderBy+` DESC) AS rank,
+				validator_performance.*,
+				validators.pubkey 
+			FROM validator_performance 
+				LEFT JOIN validators ON validators.validatorindex = validator_performance.validatorindex
+			ORDER BY `+orderBy+` `+orderDir+`
+		) AS a
+		WHERE (encode(a.pubkey::bytea, 'hex') LIKE $3
+			OR CAST(a.validatorindex AS text) LIKE $3)
+		LIMIT $1 OFFSET $2`, length, start, "%"+search+"%")
 
 	if err != nil {
 		logger.Errorf("error retrieving validator attestations data: %v", err)
@@ -121,11 +130,10 @@ func ValidatorsLeaderboardData(w http.ResponseWriter, r *http.Request) {
 
 	tableData := make([][]interface{}, len(performanceData))
 	for i, b := range performanceData {
-
 		tableData[i] = []interface{}{
 			b.Rank,
 			utils.FormatValidator(b.Index),
-			fmt.Sprintf("%x", b.PublicKey),
+			utils.FormatPublicKey(b.PublicKey),
 			fmt.Sprintf("%v", b.Balance),
 			utils.FormatIncome(b.Performance1d),
 			utils.FormatIncome(b.Performance7d),

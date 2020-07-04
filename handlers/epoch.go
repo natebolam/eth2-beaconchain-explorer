@@ -22,6 +22,7 @@ var epochNotFoundTemplate = template.Must(template.New("epochnotfound").ParseFil
 
 // Epoch will show the epoch using a go template
 func Epoch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
 	vars := mux.Vars(r)
 	epochString := strings.Replace(vars["epoch"], "0x", "", -1)
 
@@ -29,10 +30,16 @@ func Epoch(w http.ResponseWriter, r *http.Request) {
 		Meta: &types.Meta{
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "epochs",
-		Data:               nil,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "epochs",
+		Data:                  nil,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	epoch, err := strconv.ParseUint(epochString, 10, 64)
@@ -132,7 +139,6 @@ func Epoch(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		err = json.NewEncoder(w).Encode(data.Data)
 	} else {
-		w.Header().Set("Content-Type", "text/html")
 		err = epochTemplate.ExecuteTemplate(w, "layout", data)
 	}
 

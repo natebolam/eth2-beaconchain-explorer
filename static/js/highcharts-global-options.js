@@ -1,5 +1,8 @@
 // Highcharts global options
 Highcharts.setOptions({
+    time: {
+      useUTC: false,
+    },
     credits: {
       enabled: true,
       href: 'https://beaconcha.in',
@@ -9,7 +12,8 @@ Highcharts.setOptions({
       },
     },
     exporting: {
-      scale: 1
+      scale: 1,
+      enabled: false,
     },
     title: {
       style: {
@@ -47,17 +51,18 @@ Highcharts.setOptions({
       }
     },
     xAxis: {
+      ordinal: false,
       labels: {
         style: {
-          color: 'var(--body-color)'
+          color: 'var(--font-color)'
         }
       },
     },
     yAxis: {
       title: {
         style: {
-          color: 'var(--body-color)',
-          'font-size': '0.8rem'
+          color: 'var(--font-color)',
+          // 'font-size': '0.8rem'
         }
       },
       labels: {
@@ -121,32 +126,32 @@ Highcharts.setOptions({
       trackBackgroundColor: 'var(--bg-color)',
       trackBorderColor: 'var(--border-color-transparent)',
     },
-    responsive: {
-      rules: [
-        {
-          condition: {
-            maxWidth: 590
-          },
-          chartOptions: {
-            chart: {
-              marginRight: 80
-            },
-            yAxis: [
-              {
-                title: {
-                  text: null
-                }
-              },
-              {
-                title: {
-                  text: null
-                }
-              }
-            ]
-          }
-        }
-      ]
-    },
+    // responsive: {
+    //   rules: [
+    //     {
+    //       condition: {
+    //         maxWidth: 590
+    //       },
+    //       chartOptions: {
+    //         chart: {
+    //           marginRight: 80
+    //         },
+    //         yAxis: [
+    //           {
+    //             title: {
+    //               text: null
+    //             }
+    //           },
+    //           {
+    //             title: {
+    //               text: null
+    //             }
+    //           }
+    //         ]
+    //       }
+    //     }
+    //   ]
+    // },
     plotOptions: {
       line: {
         animation: false,

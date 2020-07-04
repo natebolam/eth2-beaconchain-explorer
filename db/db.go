@@ -7,23 +7,292 @@ import (
 	"eth2-exporter/utils"
 	"fmt"
 	"math/big"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
 	"github.com/lib/pq"
 	"github.com/prysmaticlabs/go-bitfield"
 	"github.com/sirupsen/logrus"
+
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // DB is a pointer to the database
+var DBPGX *pgxpool.Conn
 var DB *sqlx.DB
 var logger = logrus.New().WithField("module", "db")
+
+func GetEth1Deposits(address string, length, start uint64) ([]*types.EthOneDepositsPageData, error) {
+	deposits := []*types.EthOneDepositsPageData{}
+
+	err := DB.Select(&deposits, `
+	SELECT 
+		tx_hash,
+		tx_input,
+		tx_index,
+		block_number,
+		block_ts as block_ts,
+		from_address,
+		publickey,
+		withdrawal_credentials,
+		amount,
+		signature,
+		merkletree_index
+	FROM 
+		eth1_deposits
+	ORDER BY block_ts DESC
+	LIMIT $1
+	OFFSET $2`, length, start)
+	if err != nil {
+		return nil, err
+	}
+
+	return deposits, nil
+}
+
+func GetEth1DepositsJoinEth2Deposits(query string, length, start uint64, orderBy, orderDir string, latestEpoch, validatorOnlineThresholdSlot uint64) ([]*types.EthOneDepositsPageData, uint64, error) {
+	deposits := []*types.EthOneDepositsPageData{}
+
+	if orderDir != "desc" && orderDir != "asc" {
+		orderDir = "desc"
+	}
+	columns := []string{"tx_hash", "tx_input", "tx_index", "block_number", "block_ts", "from_address", "publickey", "withdrawal_credentials", "amount", "signature", "merkletree_index", "state", "valid_signature"}
+	hasColumn := false
+	for _, column := range columns {
+		if orderBy == column {
+			hasColumn = true
+		}
+	}
+	if !hasColumn {
+		orderBy = "block_ts"
+	}
+
+	var err error
+	var totalCount uint64
+	if query != "" {
+		err = DB.Get(&totalCount, `
+			SELECT COUNT(*) FROM eth1_deposits as eth1
+			WHERE 
+				ENCODE(eth1.publickey::bytea, 'hex') LIKE LOWER($1)
+				OR ENCODE(eth1.withdrawal_credentials::bytea, 'hex') LIKE LOWER($1)
+				OR ENCODE(eth1.from_address::bytea, 'hex') LIKE LOWER($1)
+				OR ENCODE(tx_hash::bytea, 'hex') LIKE LOWER($1)`, query+"%")
+	} else {
+		err = DB.Get(&totalCount, "SELECT COUNT(*) FROM eth1_deposits")
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if query != "" {
+		err = DB.Select(&deposits, fmt.Sprintf(`
+		SELECT 
+			eth1.tx_hash as tx_hash,
+			eth1.tx_input as tx_input,
+			eth1.tx_index as tx_index,
+			eth1.block_number as block_number,
+			eth1.block_ts as block_ts,
+			eth1.from_address as from_address,
+			eth1.publickey as publickey,
+			eth1.withdrawal_credentials as withdrawal_credentials,
+			eth1.amount as amount,
+			eth1.signature as signature,
+			eth1.merkletree_index as merkletree_index,
+			eth1.valid_signature as valid_signature,
+			COALESCE(v.state, 'deposited') as state
+		FROM
+			eth1_deposits as eth1
+		LEFT JOIN
+			(
+				SELECT pubkey,
+				CASE 
+					WHEN exitepoch <= $4 then 'exited'
+					WHEN activationepoch > $4 then 'pending'
+					WHEN slashed and activationepoch < $4 and (lastattestationslot < $5 OR lastattestationslot is null) then 'slashing_offline'
+					WHEN slashed then 'slashing_online'
+					WHEN activationepoch < $4 and (lastattestationslot < $5 OR lastattestationslot is null) then 'active_offline' 
+					ELSE 'active_online'
+				END AS state
+				FROM validators
+			) as v
+		ON
+			v.pubkey = eth1.publickey
+		WHERE
+			ENCODE(eth1.publickey::bytea, 'hex') LIKE LOWER($3)
+		OR
+			ENCODE(eth1.withdrawal_credentials::bytea, 'hex') LIKE LOWER($3)
+		OR
+			ENCODE(eth1.from_address::bytea, 'hex') LIKE LOWER($3)
+		OR
+			ENCODE(tx_hash::bytea, 'hex') LIKE LOWER($3)
+		ORDER BY %s %s
+		LIMIT $1
+		OFFSET $2`, orderBy, orderDir), length, start, query+"%", latestEpoch, validatorOnlineThresholdSlot)
+	} else {
+		err = DB.Select(&deposits, fmt.Sprintf(`
+		SELECT 
+			eth1.tx_hash as tx_hash,
+			eth1.tx_input as tx_input,
+			eth1.tx_index as tx_index,
+			eth1.block_number as block_number,
+			eth1.block_ts as block_ts,
+			eth1.from_address as from_address,
+			eth1.publickey as publickey,
+			eth1.withdrawal_credentials as withdrawal_credentials,
+			eth1.amount as amount,
+			eth1.signature as signature,
+			eth1.merkletree_index as merkletree_index,
+			eth1.valid_signature as valid_signature,
+			COALESCE(v.state, 'deposited') as state
+		FROM
+			eth1_deposits as eth1
+			LEFT JOIN
+			(
+				SELECT pubkey,
+				CASE 
+					WHEN exitepoch <= $3 then 'exited'
+					WHEN activationepoch > $3 then 'pending'
+					WHEN slashed and activationepoch < $3 and (lastattestationslot < $4 OR lastattestationslot is null) then 'slashing_offline'
+					WHEN slashed then 'slashing_online'
+					WHEN activationepoch < $3 and (lastattestationslot < $4 OR lastattestationslot is null) then 'active_offline' 
+					ELSE 'active_online'
+				END AS state
+				FROM validators
+			) as v
+		ON
+			v.pubkey = eth1.publickey
+		ORDER BY %s %s
+		LIMIT $1
+		OFFSET $2`, orderBy, orderDir), length, start, latestEpoch, validatorOnlineThresholdSlot)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return deposits, totalCount, nil
+}
+
+func GetEth1DepositsCount() (uint64, error) {
+	deposits := uint64(0)
+
+	err := DB.Get(&deposits, `
+	SELECT 
+		Count(*)
+	FROM 
+		eth1_deposits
+	`)
+	if err != nil {
+		return 0, err
+	}
+
+	return deposits, nil
+}
+
+func GetEth2Deposits(query string, length, start uint64, orderBy, orderDir string) ([]*types.EthTwoDepositsPageData, error) {
+	deposits := []*types.EthTwoDepositsPageData{}
+	// ENCODE(publickey::bytea, 'hex') LIKE $3 OR ENCODE(withdrawalcredentials::bytea, 'hex') LIKE $3 OR
+	if orderDir != "desc" && orderDir != "asc" {
+		orderDir = "desc"
+	}
+	columns := []string{"block_slot", "publickey", "amount", "withdrawalcredentials", "signature"}
+	hasColumn := false
+	for _, column := range columns {
+		if orderBy == column {
+			hasColumn = true
+		}
+	}
+	if !hasColumn {
+		orderBy = "block_slot"
+	}
+
+	if query != "" {
+		err := DB.Select(&deposits, fmt.Sprintf(`
+			SELECT 
+				blocks_deposits.block_slot,
+				blocks_deposits.block_index,
+				blocks_deposits.proof,
+				blocks_deposits.publickey,
+				blocks_deposits.withdrawalcredentials,
+				blocks_deposits.amount,
+				blocks_deposits.signature
+			FROM blocks_deposits
+			WHERE ENCODE(publickey::bytea, 'hex') LIKE $3 OR ENCODE(withdrawalcredentials::bytea, 'hex') LIKE $3 OR CAST(block_slot as varchar) LIKE $3
+			ORDER BY %s %s
+			LIMIT $1
+			OFFSET $2`, orderBy, orderDir), length, start, query+"%")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err := DB.Select(&deposits, fmt.Sprintf(`
+			SELECT 
+				blocks_deposits.block_slot,
+				blocks_deposits.block_index,
+				blocks_deposits.proof,
+				blocks_deposits.publickey,
+				blocks_deposits.withdrawalcredentials,
+				blocks_deposits.amount,
+				blocks_deposits.signature
+			FROM blocks_deposits
+			ORDER BY %s %s
+			LIMIT $1
+			OFFSET $2`, orderBy, orderDir), length, start)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return deposits, nil
+}
+
+func GetEth2DepositsCount() (uint64, error) {
+	deposits := uint64(0)
+
+	err := DB.Get(&deposits, `
+	SELECT 
+		Count(*)
+	FROM 
+		blocks_deposits
+	`)
+	if err != nil {
+		return 0, err
+	}
+
+	return deposits, nil
+}
+func GetSlashingCount() (uint64, error) {
+	slashings := uint64(0)
+
+	err := DB.Get(&slashings, `
+	SELECT 
+	SUM(count)
+	FROM 
+	(
+		SELECT COUNT(*) 
+		FROM 
+			blocks_attesterslashings 
+		UNION 
+		SELECT 
+		  COUNT(*) 
+		FROM 
+			blocks_proposerslashings
+	) as tbl
+	`)
+	if err != nil {
+		return 0, err
+	}
+
+	return slashings, nil
+}
 
 // GetLatestEpoch will return the latest epoch from the database
 func GetLatestEpoch() (uint64, error) {
 	var epoch uint64
-
 	err := DB.Get(&epoch, "SELECT COALESCE(MAX(epoch), 0) FROM epochs")
 
 	if err != nil {
@@ -79,12 +348,28 @@ func GetValidatorPublicKey(index uint64) ([]byte, error) {
 	return publicKey, err
 }
 
-// GetValidatorIndex will return all of the validators for a public key from the database
+// GetValidatorIndex will return the validator-index for a public key from the database
 func GetValidatorIndex(publicKey []byte) (uint64, error) {
 	var index uint64
 	err := DB.Get(&index, "SELECT validatorindex FROM validators WHERE pubkey = $1", publicKey)
 
 	return index, err
+}
+
+// GetValidatorDeposits will return eth1- and eth2-deposits for a public key from the database
+func GetValidatorDeposits(publicKey []byte) (*types.ValidatorDeposits, error) {
+	deposits := &types.ValidatorDeposits{}
+	err := DB.Select(&deposits.Eth1Deposits, `
+		SELECT tx_hash, tx_input, tx_index, block_number, EXTRACT(epoch FROM block_ts)::INT as block_ts, from_address, publickey, withdrawal_credentials, amount, signature, merkletree_index, valid_signature
+		FROM eth1_deposits WHERE publickey = $1`, publicKey)
+	if err != nil {
+		return nil, err
+	}
+	err = DB.Select(&deposits.Eth2Deposits, "SELECT * FROM blocks_deposits WHERE publickey = $1", publicKey)
+	if err != nil {
+		return nil, err
+	}
+	return deposits, nil
 }
 
 // UpdateCanonicalBlocks will update the blocks for an epoch range in the database
@@ -115,7 +400,7 @@ func UpdateCanonicalBlocks(startEpoch, endEpoch uint64, orphanedBlocks [][]byte)
 }
 
 // SaveValidatorQueue will save the validator queue into the database
-func SaveValidatorQueue(validators *types.ValidatorQueue, validatorIndices map[string]uint64) error {
+func SaveValidatorQueue(validators *types.ValidatorQueue) error {
 	tx, err := DB.Begin()
 	if err != nil {
 		return fmt.Errorf("error starting db transactions: %v", err)
@@ -147,14 +432,14 @@ func SaveValidatorQueue(validators *types.ValidatorQueue, validatorIndices map[s
 	}
 	defer stmtValidatorQueueExit.Close()
 
-	for _, publickey := range validators.ActivationPublicKeys {
-		_, err := stmtValidatorQueueActivation.Exec(validatorIndices[utils.FormatPublicKey(publickey)], publickey)
+	for i, publickey := range validators.ActivationPublicKeys {
+		_, err := stmtValidatorQueueActivation.Exec(validators.ActivationValidatorIndices[i], publickey)
 		if err != nil {
 			return fmt.Errorf("error executing stmtValidatorQueueActivation: %v", err)
 		}
 	}
-	for _, publickey := range validators.ExitPublicKeys {
-		_, err := stmtValidatorQueueExit.Exec(validatorIndices[utils.FormatPublicKey(publickey)], publickey)
+	for i, publickey := range validators.ExitPublicKeys {
+		_, err := stmtValidatorQueueExit.Exec(validators.ExitValidatorIndices[i], publickey)
 		if err != nil {
 			return fmt.Errorf("error executing stmtValidatorQueueExit: %v", err)
 		}
@@ -181,6 +466,7 @@ func SaveEpoch(data *types.EpochData) error {
 	logger.Infof("exporting block data")
 	err = saveBlocks(data.Epoch, data.Blocks, tx)
 	if err != nil {
+		logger.Fatalf("error saving blocks to db: %v", err)
 		return fmt.Errorf("error saving blocks to db: %v", err)
 	}
 
@@ -226,18 +512,15 @@ func SaveEpoch(data *types.EpochData) error {
 	}
 
 	validatorBalanceSum := new(big.Int)
-	for _, v := range data.Validators {
-		validatorBalanceSum = new(big.Int).Add(validatorBalanceSum, new(big.Int).SetUint64(v.Balance))
-	}
-
-	validatorBalanceAverage := new(big.Int).Div(validatorBalanceSum, new(big.Int).SetInt64(int64(len(data.Validators)))).Uint64()
-
 	validatorsCount := 0
 	for _, v := range data.Validators {
-		if v.ExitEpoch > data.Epoch {
+		if v.ExitEpoch > data.Epoch && v.ActivationEpoch <= data.Epoch {
 			validatorsCount++
+			validatorBalanceSum = new(big.Int).Add(validatorBalanceSum, new(big.Int).SetUint64(v.Balance))
 		}
 	}
+
+	validatorBalanceAverage := new(big.Int).Div(validatorBalanceSum, new(big.Int).SetInt64(int64(validatorsCount)))
 
 	_, err = tx.Exec(`
 		INSERT INTO epochs (
@@ -250,12 +533,13 @@ func SaveEpoch(data *types.EpochData) error {
 			voluntaryexitscount, 
 			validatorscount, 
 			averagevalidatorbalance, 
+			totalvalidatorbalance,
 			finalized, 
 			eligibleether, 
 			globalparticipationrate, 
 			votedether
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
 		ON CONFLICT (epoch) DO UPDATE SET 
 			blockscount             = excluded.blockscount, 
 			proposerslashingscount  = excluded.proposerslashingscount,
@@ -265,6 +549,7 @@ func SaveEpoch(data *types.EpochData) error {
 			voluntaryexitscount     = excluded.voluntaryexitscount,
 			validatorscount         = excluded.validatorscount,
 			averagevalidatorbalance = excluded.averagevalidatorbalance,
+			totalvalidatorbalance   = excluded.totalvalidatorbalance,
 			finalized               = excluded.finalized,
 			eligibleether           = excluded.eligibleether,
 			globalparticipationrate = excluded.globalparticipationrate,
@@ -277,7 +562,8 @@ func SaveEpoch(data *types.EpochData) error {
 		depositCount,
 		voluntaryExitCount,
 		validatorsCount,
-		validatorBalanceAverage,
+		validatorBalanceAverage.Uint64(),
+		validatorBalanceSum.Uint64(),
 		data.EpochParticipationStats.Finalized,
 		data.EpochParticipationStats.EligibleEther,
 		data.EpochParticipationStats.GlobalParticipationRate,
@@ -287,6 +573,10 @@ func SaveEpoch(data *types.EpochData) error {
 		return fmt.Errorf("error executing save epoch statement: %v", err)
 	}
 
+	err = saveGraffitiwall(data.Blocks, tx)
+	if err != nil {
+		return fmt.Errorf("error saving graffitiwall: %v", err)
+	}
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("error committing db transaction: %v", err)
@@ -296,8 +586,127 @@ func SaveEpoch(data *types.EpochData) error {
 	return nil
 }
 
+func saveGraffitiwall(blocks map[uint64]map[string]*types.Block, tx *sql.Tx) error {
+
+	stmtGraffitiwall, err := tx.Prepare(`
+		INSERT INTO graffitiwall (
+			x,
+			y,
+			color,
+			slot,
+			validator
+		)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (x, y) DO UPDATE SET
+										 color         = EXCLUDED.color,
+										 slot          = EXCLUDED.slot,
+										 validator     = EXCLUDED.validator
+		WHERE excluded.slot > graffitiwall.slot;
+		`)
+	if err != nil {
+		return err
+	}
+	defer stmtGraffitiwall.Close()
+
+	graffitiWallRegex := regexp.MustCompile("graffitiwall:([0-9]{1,3}):([0-9]{1,3}):#([0-9a-fA-F]{6})")
+
+	for _, slot := range blocks {
+		for _, block := range slot {
+			matches := graffitiWallRegex.FindStringSubmatch(string(block.Graffiti))
+			if len(matches) == 4 {
+				x, err := strconv.Atoi(matches[1])
+				if err != nil || x >= 1000 {
+					return fmt.Errorf("error parsing x coordinate for graffiti %v of block %v", string(block.Graffiti), block.Slot)
+				}
+
+				y, err := strconv.Atoi(matches[2])
+				if err != nil || y >= 1000 {
+					return fmt.Errorf("error parsing y coordinate for graffiti %v of block %v", string(block.Graffiti), block.Slot)
+				}
+				color := matches[3]
+
+				logger.Infof("set graffiti at %v - %v with color %v for slot %v by validator %v", x, y, color, block.Slot, block.Proposer)
+				_, err = stmtGraffitiwall.Exec(x, y, color, block.Slot, block.Proposer)
+
+				if err != nil {
+					return fmt.Errorf("error executing graffitiwall statement: %v", err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func saveValidators(epoch uint64, validators []*types.Validator, tx *sql.Tx) error {
-	stmtValidators, err := tx.Prepare(`
+	batchSize := 5000
+	var lenActivatedValidators int
+	var lastActivatedValidatorIdx uint64
+
+	for _, v := range validators {
+		if !(v.ActivationEpoch <= epoch && epoch < v.ExitEpoch) {
+			continue
+		}
+		lenActivatedValidators++
+		if v.Index < lastActivatedValidatorIdx {
+			continue
+		}
+		lastActivatedValidatorIdx = v.Index
+	}
+
+	for b := 0; b < len(validators); b += batchSize {
+		start := b
+		end := b + batchSize
+		if len(validators) < end {
+			end = len(validators)
+		}
+
+		valueStrings := make([]string, 0, batchSize)
+		valueArgs := make([]interface{}, 0, batchSize*10)
+		for i, v := range validators[start:end] {
+
+			if v.WithdrawableEpoch == 18446744073709551615 {
+				v.WithdrawableEpoch = 9223372036854775807
+			}
+			if v.ExitEpoch == 18446744073709551615 {
+				v.ExitEpoch = 9223372036854775807
+			}
+			if v.ActivationEligibilityEpoch == 18446744073709551615 {
+				v.ActivationEligibilityEpoch = 9223372036854775807
+			}
+			if v.ActivationEpoch == 18446744073709551615 {
+				v.ActivationEpoch = 9223372036854775807
+			}
+			if v.ActivationEligibilityEpoch < 9223372036854775807 && v.ActivationEpoch == 9223372036854775807 {
+				// see: https://github.com/ethereum/eth2.0-specs/blob/master/specs/phase0/beacon-chain.md#get_validator_churn_limit
+				// validator_churn_limit = max(MIN_PER_EPOCH_CHURN_LIMIT, len(active_validator_indices) // CHURN_LIMIT_QUOTIENT)
+				// validator_churn_limit = max(4, len(active_set) / 2**16)
+				// validator.activationepoch = epoch + validator.positioninactivationqueue / validator_churn_limit
+				// note: this is only an estimation
+				positionInActivationQueue := v.Index - lastActivatedValidatorIdx
+				churnLimit := float64(lenActivatedValidators) / 65536
+				if churnLimit < 4 {
+					churnLimit = 4
+				}
+				if v.ActivationEligibilityEpoch > epoch {
+					v.ActivationEpoch = v.ActivationEligibilityEpoch + uint64(float64(positionInActivationQueue)/churnLimit)
+				} else {
+					v.ActivationEpoch = epoch + uint64(float64(positionInActivationQueue)/churnLimit)
+				}
+			}
+
+			valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)", i*10+1, i*10+2, i*10+3, i*10+4, i*10+5, i*10+6, i*10+7, i*10+8, i*10+9, i*10+10))
+			valueArgs = append(valueArgs, v.Index)
+			valueArgs = append(valueArgs, v.PublicKey)
+			valueArgs = append(valueArgs, v.WithdrawableEpoch)
+			valueArgs = append(valueArgs, v.WithdrawalCredentials)
+			valueArgs = append(valueArgs, v.Balance)
+			valueArgs = append(valueArgs, v.EffectiveBalance)
+			valueArgs = append(valueArgs, v.Slashed)
+			valueArgs = append(valueArgs, v.ActivationEligibilityEpoch)
+			valueArgs = append(valueArgs, v.ActivationEpoch)
+			valueArgs = append(valueArgs, v.ExitEpoch)
+		}
+		stmt := fmt.Sprintf(`
 		INSERT INTO validators (
 			validatorindex,
 			pubkey,
@@ -310,7 +719,7 @@ func saveValidators(epoch uint64, validators []*types.Validator, tx *sql.Tx) err
 			activationepoch,
 			exitepoch
 		) 
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+		VALUES %s
 		ON CONFLICT (validatorindex) DO UPDATE SET 
 			pubkey                     = EXCLUDED.pubkey,
 			withdrawableepoch          = EXCLUDED.withdrawableepoch,
@@ -320,58 +729,10 @@ func saveValidators(epoch uint64, validators []*types.Validator, tx *sql.Tx) err
 			slashed                    = EXCLUDED.slashed,
 			activationeligibilityepoch = EXCLUDED.activationeligibilityepoch,
 			activationepoch            = EXCLUDED.activationepoch,
-			exitepoch                  = EXCLUDED.exitepoch`)
-	if err != nil {
-		return err
-	}
-	defer stmtValidators.Close()
-
-	var lenActivatedValidators int
-	var lastActivatedValidatorIdx uint64
-	for _, v := range validators {
-		if !(v.ActivationEpoch <= epoch && epoch < v.ExitEpoch) {
-			continue
-		}
-		lenActivatedValidators++
-		if v.Index < lastActivatedValidatorIdx {
-			continue
-		}
-		lastActivatedValidatorIdx = v.Index
-	}
-
-	for _, v := range validators {
-		if v.WithdrawableEpoch == 18446744073709551615 {
-			v.WithdrawableEpoch = 9223372036854775807
-		}
-		if v.ExitEpoch == 18446744073709551615 {
-			v.ExitEpoch = 9223372036854775807
-		}
-		if v.ActivationEligibilityEpoch == 18446744073709551615 {
-			v.ActivationEligibilityEpoch = 9223372036854775807
-		}
-		if v.ActivationEpoch == 18446744073709551615 {
-			v.ActivationEpoch = 9223372036854775807
-		}
-		if v.ActivationEligibilityEpoch < 9223372036854775807 && v.ActivationEpoch == 9223372036854775807 {
-			// see: https://github.com/ethereum/eth2.0-specs/blob/master/specs/phase0/beacon-chain.md#get_validator_churn_limit
-			// validator_churn_limit = max(MIN_PER_EPOCH_CHURN_LIMIT, len(active_validator_indices) // CHURN_LIMIT_QUOTIENT)
-			// validator_churn_limit = max(4, len(active_set) / 2**16)
-			// validator.activationepoch = epoch + validator.positioninactivationqueue / validator_churn_limit
-			// note: this is only an estimation
-			positionInActivationQueue := v.Index - lastActivatedValidatorIdx
-			churnLimit := float64(lenActivatedValidators) / 65536
-			if churnLimit < 4 {
-				churnLimit = 4
-			}
-			if v.ActivationEligibilityEpoch > epoch {
-				v.ActivationEpoch = v.ActivationEligibilityEpoch + uint64(float64(positionInActivationQueue)/churnLimit)
-			} else {
-				v.ActivationEpoch = epoch + uint64(float64(positionInActivationQueue)/churnLimit)
-			}
-		}
-		_, err = stmtValidators.Exec(v.Index, v.PublicKey, v.WithdrawableEpoch, v.WithdrawalCredentials, v.Balance, v.EffectiveBalance, v.Slashed, v.ActivationEligibilityEpoch, v.ActivationEpoch, v.ExitEpoch)
+			exitepoch                  = EXCLUDED.exitepoch`, strings.Join(valueStrings, ","))
+		_, err := tx.Exec(stmt, valueArgs...)
 		if err != nil {
-			return fmt.Errorf("error executing save validator statement: %v", err)
+			return err
 		}
 	}
 
@@ -399,19 +760,33 @@ func saveValidatorProposalAssignments(epoch uint64, assignments map[uint64]uint6
 }
 
 func saveValidatorAttestationAssignments(epoch uint64, assignments map[string]uint64, tx *sql.Tx) error {
-	stmtAttestationAssignments, err := tx.Prepare(`
-		INSERT INTO attestation_assignments (epoch, validatorindex, attesterslot, committeeindex, status)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (epoch, validatorindex, attesterslot, committeeindex) DO NOTHING`)
-	if err != nil {
-		return err
-	}
-	defer stmtAttestationAssignments.Close()
 
+	args := make([][]interface{}, 0, len(assignments))
 	for key, validator := range assignments {
 		keySplit := strings.Split(key, "-")
+		args = append(args, []interface{}{epoch, validator, keySplit[0], keySplit[1], 0})
+	}
 
-		_, err := stmtAttestationAssignments.Exec(epoch, validator, keySplit[0], keySplit[1], 0)
+	batchSize := 10000
+
+	for b := 0; b < len(args); b += batchSize {
+		start := b
+		end := b + batchSize
+		if len(args) < end {
+			end = len(args)
+		}
+
+		valueStrings := make([]string, 0, batchSize)
+		valueArgs := make([]interface{}, 0, batchSize*5)
+		for i, v := range args[start:end] {
+			valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", i*5+1, i*5+2, i*5+3, i*5+4, i*5+5))
+			valueArgs = append(valueArgs, v...)
+		}
+		stmt := fmt.Sprintf(`
+		INSERT INTO attestation_assignments (epoch, validatorindex, attesterslot, committeeindex, status)
+		VALUES %s
+		ON CONFLICT (epoch, validatorindex, attesterslot, committeeindex) DO NOTHING`, strings.Join(valueStrings, ","))
+		_, err := tx.Exec(stmt, valueArgs...)
 		if err != nil {
 			return fmt.Errorf("error executing save validator attestation assignment statement: %v", err)
 		}
@@ -421,21 +796,33 @@ func saveValidatorAttestationAssignments(epoch uint64, assignments map[string]ui
 }
 
 func saveValidatorBalances(epoch uint64, validators []*types.Validator, tx *sql.Tx) error {
-	stmt, err := tx.Prepare(`
+	batchSize := 10000
+
+	for b := 0; b < len(validators); b += batchSize {
+		start := b
+		end := b + batchSize
+		if len(validators) < end {
+			end = len(validators)
+		}
+
+		valueStrings := make([]string, 0, batchSize)
+		valueArgs := make([]interface{}, 0, batchSize*4)
+		for i, v := range validators[start:end] {
+			valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", i*4+1, i*4+2, i*4+3, i*4+4))
+			valueArgs = append(valueArgs, epoch)
+			valueArgs = append(valueArgs, v.Index)
+			valueArgs = append(valueArgs, v.Balance)
+			valueArgs = append(valueArgs, v.EffectiveBalance)
+		}
+		stmt := fmt.Sprintf(`
 		INSERT INTO validator_balances (epoch, validatorindex, balance, effectivebalance)
-		VALUES ($1, $2, $3, $4)
+		VALUES %s
 		ON CONFLICT (epoch, validatorindex) DO UPDATE SET
 			balance          = EXCLUDED.balance,
-			effectivebalance = EXCLUDED.effectivebalance`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, v := range validators {
-		_, err := stmt.Exec(epoch, v.Index, v.Balance, v.EffectiveBalance)
+			effectivebalance = EXCLUDED.effectivebalance`, strings.Join(valueStrings, ","))
+		_, err := tx.Exec(stmt, valueArgs...)
 		if err != nil {
-			return fmt.Errorf("error executing save validator balance statement: %v", err)
+			return err
 		}
 	}
 
@@ -443,6 +830,7 @@ func saveValidatorBalances(epoch uint64, validators []*types.Validator, tx *sql.
 }
 
 func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql.Tx) error {
+
 	stmtBlock, err := tx.Prepare(`
 		INSERT INTO blocks (epoch, slot, blockroot, parentroot, stateroot, signature, randaoreveal, graffiti, eth1data_depositroot, eth1data_depositcount, eth1data_blockhash, proposerslashingscount, attesterslashingscount, attestationscount, depositscount, voluntaryexitscount, proposer, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
@@ -462,9 +850,9 @@ func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql
 	defer stmtProposerSlashing.Close()
 
 	stmtAttesterSlashing, err := tx.Prepare(`
-		INSERT INTO blocks_attesterslashings (block_slot, block_index, attestation1_signature, attestation1_slot, attestation1_index, attestation1_beaconblockroot, attestation1_source_epoch, attestation1_source_root, attestation1_target_epoch, attestation1_target_root, attestation2_signature, attestation2_slot, attestation2_index, attestation2_beaconblockroot, attestation2_source_epoch, attestation2_source_root, attestation2_target_epoch, attestation2_target_root)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-		ON CONFLICT (block_slot, block_index) DO NOTHING`)
+		INSERT INTO blocks_attesterslashings (block_slot, block_index, attestation1_indices, attestation1_signature, attestation1_slot, attestation1_index, attestation1_beaconblockroot, attestation1_source_epoch, attestation1_source_root, attestation1_target_epoch, attestation1_target_root, attestation2_indices, attestation2_signature, attestation2_slot, attestation2_index, attestation2_beaconblockroot, attestation2_source_epoch, attestation2_source_root, attestation2_target_epoch, attestation2_target_root)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		ON CONFLICT (block_slot, block_index) DO UPDATE SET attestation1_indices = excluded.attestation1_indices, attestation2_indices = excluded.attestation2_indices`)
 	if err != nil {
 		return err
 	}
@@ -506,23 +894,22 @@ func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql
 	}
 	defer stmtProposalAssignments.Close()
 
-	stmtAttestationAssignments, err := tx.Prepare(`
-		INSERT INTO attestation_assignments (epoch, validatorindex, attesterslot, committeeindex, status)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (epoch, validatorindex, attesterslot, committeeindex) DO UPDATE SET status = excluded.status`)
-	if err != nil {
-		return err
-	}
-	defer stmtAttestationAssignments.Close()
-
-	stmtValidatorsLastAttestationSlot, err := tx.Prepare(`UPDATE validators SET lastattestationslot = $1 WHERE validatorindex = $2`)
+	stmtValidatorsLastAttestationSlot, err := tx.Prepare(`UPDATE validators SET lastattestationslot = $1 WHERE validatorindex = ANY($2::int[])`)
 	if err != nil {
 		return err
 	}
 	defer stmtValidatorsLastAttestationSlot.Close()
 
-	for _, slot := range blocks {
-		for _, b := range slot {
+	slots := make([]uint64, 0, len(blocks))
+	for slot := range blocks {
+		slots = append(slots, slot)
+	}
+	sort.Slice(slots, func(i, j int) bool {
+		return slots[i] < slots[j]
+	})
+
+	for _, slot := range slots {
+		for _, b := range blocks[slot] {
 			var dbBlockRootHash []byte
 			err := DB.Get(&dbBlockRootHash, "SELECT blockroot FROM blocks WHERE slot = $1 and blockroot = $2", b.Slot, b.BlockRoot)
 
@@ -539,7 +926,9 @@ func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql
 				return fmt.Errorf("error deleting placeholder block: %v", err)
 			}
 
-			logger.Infof("writing block data")
+			n := time.Now()
+
+			logger.Tracef("writing block data: %v", b.Eth1Data.DepositRoot)
 			_, err = stmtBlock.Exec(epoch,
 				b.Slot,
 				b.BlockRoot,
@@ -557,40 +946,72 @@ func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql
 				len(b.Deposits),
 				len(b.VoluntaryExits),
 				b.Proposer,
-				b.Status)
+				strconv.FormatUint(b.Status, 10))
 			if err != nil {
 				return fmt.Errorf("error executing stmtBlocks for block %v: %v", b.Slot, err)
 			}
 
-			logger.Infof("writing proposer slashings data")
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
+			logger.Tracef("writing proposer slashings data")
 			for i, ps := range b.ProposerSlashings {
 				_, err := stmtProposerSlashing.Exec(b.Slot, i, ps.ProposerIndex, ps.Header1.Slot, ps.Header1.ParentRoot, ps.Header1.StateRoot, ps.Header1.BodyRoot, ps.Header1.Signature, ps.Header2.Slot, ps.Header2.ParentRoot, ps.Header2.StateRoot, ps.Header2.BodyRoot, ps.Header2.Signature)
 				if err != nil {
 					return fmt.Errorf("error executing stmtProposerSlashing for block %v: %v", b.Slot, err)
 				}
 			}
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
 
-			logger.Infof("writing attester slashings data")
+			logger.Tracef("writing attester slashings data")
 			for i, as := range b.AttesterSlashings {
-				_, err := stmtAttesterSlashing.Exec(b.Slot, i, as.Attestation1.Signature, as.Attestation1.Data.Slot, as.Attestation1.Data.CommitteeIndex, as.Attestation1.Data.BeaconBlockRoot, as.Attestation1.Data.Source.Epoch, as.Attestation1.Data.Source.Root, as.Attestation1.Data.Target.Epoch, as.Attestation1.Data.Target.Root, as.Attestation2.Signature, as.Attestation2.Data.Slot, as.Attestation2.Data.CommitteeIndex, as.Attestation2.Data.BeaconBlockRoot, as.Attestation2.Data.Source.Epoch, as.Attestation2.Data.Source.Root, as.Attestation2.Data.Target.Epoch, as.Attestation2.Data.Target.Root)
+				_, err := stmtAttesterSlashing.Exec(b.Slot, i, pq.Array(as.Attestation1.AttestingIndices), as.Attestation1.Signature, as.Attestation1.Data.Slot, as.Attestation1.Data.CommitteeIndex, as.Attestation1.Data.BeaconBlockRoot, as.Attestation1.Data.Source.Epoch, as.Attestation1.Data.Source.Root, as.Attestation1.Data.Target.Epoch, as.Attestation1.Data.Target.Root, pq.Array(as.Attestation2.AttestingIndices), as.Attestation2.Signature, as.Attestation2.Data.Slot, as.Attestation2.Data.CommitteeIndex, as.Attestation2.Data.BeaconBlockRoot, as.Attestation2.Data.Source.Epoch, as.Attestation2.Data.Source.Root, as.Attestation2.Data.Target.Epoch, as.Attestation2.Data.Target.Root)
 				if err != nil {
 					return fmt.Errorf("error executing stmtAttesterSlashing for block %v: %v", b.Slot, err)
 				}
 			}
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
 
-			logger.Infof("writing attestation data")
+			logger.Tracef("writing attestation data")
+
 			for i, a := range b.Attestations {
+				attestationAssignmentsArgs := make([][]interface{}, 0, 10000)
+				attestingValidators := make([]string, 0, 10000)
 
 				for _, validator := range a.Attesters {
-					_, err = stmtAttestationAssignments.Exec(a.Data.Slot/utils.Config.Chain.SlotsPerEpoch, validator, a.Data.Slot, a.Data.CommitteeIndex, 1)
+					attestationAssignmentsArgs = append(attestationAssignmentsArgs, []interface{}{a.Data.Slot / utils.Config.Chain.SlotsPerEpoch, validator, a.Data.Slot, a.Data.CommitteeIndex, 1})
+					attestingValidators = append(attestingValidators, strconv.FormatUint(validator, 10))
+				}
+
+				batchSize := 10000
+
+				for batch := 0; batch < len(attestationAssignmentsArgs); batch += batchSize {
+					start := batch
+					end := batch + batchSize
+					if len(attestationAssignmentsArgs) < end {
+						end = len(attestationAssignmentsArgs)
+					}
+
+					valueStrings := make([]string, 0, batchSize)
+					valueArgs := make([]interface{}, 0, batchSize*5)
+					for i, v := range attestationAssignmentsArgs[start:end] {
+						valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", i*5+1, i*5+2, i*5+3, i*5+4, i*5+5))
+						valueArgs = append(valueArgs, v...)
+					}
+					stmt := fmt.Sprintf(`
+						INSERT INTO attestation_assignments (epoch, validatorindex, attesterslot, committeeindex, status)
+						VALUES %s
+						ON CONFLICT (epoch, validatorindex, attesterslot, committeeindex) DO UPDATE SET status = excluded.status`, strings.Join(valueStrings, ","))
+					_, err := tx.Exec(stmt, valueArgs...)
 					if err != nil {
 						return fmt.Errorf("error executing stmtAttestationAssignments for block %v: %v", b.Slot, err)
 					}
+				}
 
-					_, err = stmtValidatorsLastAttestationSlot.Exec(a.Data.Slot, validator)
-					if err != nil {
-						return fmt.Errorf("error executing stmtValidatorsLastAttestationSlot for block %v: %v", b.Slot, err)
-					}
+				_, err = stmtValidatorsLastAttestationSlot.Exec(a.Data.Slot, "{"+strings.Join(attestingValidators, ",")+"}")
+				if err != nil {
+					return fmt.Errorf("error executing stmtValidatorsLastAttestationSlot for block %v: %v", b.Slot, err)
 				}
 
 				_, err = stmtAttestations.Exec(b.Slot, i, bitfield.Bitlist(a.AggregationBits).Bytes(), pq.Array(a.Attesters), a.Signature, a.Data.Slot, a.Data.CommitteeIndex, a.Data.BeaconBlockRoot, a.Data.Source.Epoch, a.Data.Source.Root, a.Data.Target.Epoch, a.Data.Target.Root)
@@ -599,23 +1020,30 @@ func saveBlocks(epoch uint64, blocks map[uint64]map[string]*types.Block, tx *sql
 				}
 			}
 
-			logger.Infof("writing deposits data")
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
+
+			logger.Tracef("writing deposits data")
 			for i, d := range b.Deposits {
 				_, err := stmtDeposits.Exec(b.Slot, i, nil, d.PublicKey, d.WithdrawalCredentials, d.Amount, d.Signature)
 				if err != nil {
 					return fmt.Errorf("error executing stmtDeposits for block %v: %v", b.Slot, err)
 				}
 			}
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
 
-			logger.Infof("writing voluntary exits data")
+			logger.Tracef("writing voluntary exits data")
 			for i, ve := range b.VoluntaryExits {
 				_, err := stmtVoluntaryExits.Exec(b.Slot, i, ve.Epoch, ve.ValidatorIndex, ve.Signature)
 				if err != nil {
 					return fmt.Errorf("error executing stmtVoluntaryExits for block %v: %v", b.Slot, err)
 				}
 			}
+			logger.Tracef("done, took %v", time.Since(n))
+			n = time.Now()
 
-			logger.Infof("writing proposal assignments data")
+			logger.Tracef("writing proposal assignments data")
 			_, err = stmtProposalAssignments.Exec(epoch, b.Proposer, b.Slot, b.Status)
 			if err != nil {
 				return fmt.Errorf("error executing stmtProposalAssignments for block %v: %v", b.Slot, err)
@@ -640,4 +1068,11 @@ func UpdateEpochStatus(stats *types.ValidatorParticipation) error {
 		stats.Finalized, stats.EligibleEther, stats.GlobalParticipationRate, stats.VotedEther, stats.Epoch)
 
 	return err
+}
+
+// GetTotalValidatorsCount will return the total-validator-count
+func GetTotalValidatorsCount() (uint64, error) {
+	var totalCount uint64
+	err := DB.Get(&totalCount, "SELECT COUNT(*) FROM validators")
+	return totalCount, err
 }

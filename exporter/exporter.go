@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"eth2-exporter/db"
 	"eth2-exporter/rpc"
+	"eth2-exporter/services"
 	"eth2-exporter/types"
 	"eth2-exporter/utils"
 	"fmt"
@@ -23,6 +24,19 @@ var epochBlacklist = make(map[uint64]uint64)
 // Start will start the export of data from rpc into the database
 func Start(client rpc.Client) error {
 	go performanceDataUpdater()
+	go networkLivenessUpdater(client)
+	go eth1DepositsExporter()
+	go genesisDepositsExporter()
+
+	// wait until the beacon-node is available
+	for {
+		_, err := client.GetChainHead()
+		if err == nil {
+			break
+		}
+		logger.Errorf("beacon-node seems to be unavailable: %v", err)
+		time.Sleep(time.Second * 10)
+	}
 
 	if utils.Config.Indexer.FullIndexOnStartup {
 		logger.Printf("performing one time full db reindex")
@@ -45,6 +59,15 @@ func Start(client rpc.Client) error {
 		epochs, err := db.GetAllEpochs()
 		if err != nil {
 			logger.Fatal(err)
+		}
+
+		if len(epochs) > 0 && epochs[0] != 0 {
+			err := ExportEpoch(0, client)
+			if err != nil {
+				logger.Error(err)
+			}
+			logger.Printf("finished export for epoch %v", 0)
+			epochs = append([]uint64{0}, epochs...)
 		}
 
 		for i := 0; i < len(epochs)-1; i++ {
@@ -268,6 +291,12 @@ func Start(client rpc.Client) error {
 			logger.Printf("finished export for epoch %v", epoch)
 		}
 
+		logger.Infof("marking orphaned blocks of epochs %v-%v", startEpoch, head.HeadEpoch)
+		err = MarkOrphanedBlocks(startEpoch, head.HeadEpoch, nodeBlocks)
+		if err != nil {
+			logger.Errorf("error marking orphaned blocks: %v", err)
+		}
+
 		// Update epoch statistics up to 10 epochs after the last finalized epoch
 		startEpoch = uint64(0)
 		if head.FinalizedEpoch > 10 {
@@ -283,12 +312,6 @@ func Start(client rpc.Client) error {
 		err = exportValidatorQueue(client)
 		if err != nil {
 			logger.Errorf("error exporting validator queue data: %v", err)
-		}
-
-		logger.Infof("marking orphaned blocks of epochs %v-%v", startEpoch, head.HeadEpoch)
-		err = MarkOrphanedBlocks(startEpoch, head.HeadEpoch, nodeBlocks)
-		if err != nil {
-			logger.Errorf("error marking orphaned blocks: %v", err)
 		}
 
 		logger.Infof("finished exporting all new blocks/epochs")
@@ -377,13 +400,12 @@ func ExportEpoch(epoch uint64, client rpc.Client) error {
 }
 
 func exportValidatorQueue(client rpc.Client) error {
-
-	validators, validatorIndices, err := client.GetValidatorQueue()
+	queue, err := client.GetValidatorQueue()
 	if err != nil {
 		return fmt.Errorf("error retrieving validator queue data: %v", err)
 	}
 
-	return db.SaveValidatorQueue(validators, validatorIndices)
+	return db.SaveValidatorQueue(queue)
 }
 
 func updateEpochStatus(client rpc.Client, startEpoch, endEpoch uint64) error {
@@ -410,7 +432,7 @@ func performanceDataUpdater() {
 		err := updateValidatorPerformance()
 
 		if err != nil {
-			logger.Errorf("error updating validator performance data: %w", err)
+			logger.Errorf("error updating validator performance data: %v", err)
 		} else {
 			logger.Info("validator performance data update completed")
 		}
@@ -455,11 +477,16 @@ func updateValidatorPerformance() error {
 		epoch365d = 0
 	}
 
-	var startBalances []*types.ValidatorBalance
+	var startBalances []struct {
+		Index           uint64
+		Balance         uint64
+		Activationepoch int64
+	}
 	err = tx.Select(&startBalances, `
 		SELECT 
-			validator_balances.validatorindex,
-			validator_balances.balance
+			validator_balances.validatorindex as index,
+			validator_balances.balance,
+			validators.activationepoch
 		FROM validators
 			LEFT JOIN validator_balances
 				ON validators.activationepoch = validator_balances.epoch
@@ -469,8 +496,10 @@ func updateValidatorPerformance() error {
 		return fmt.Errorf("error retrieving initial validator balances data: %w", err)
 	}
 
+	startEpochMap := make(map[uint64]int64)
 	startBalanceMap := make(map[uint64]uint64)
 	for _, balance := range startBalances {
+		startEpochMap[balance.Index] = balance.Activationepoch
 		startBalanceMap[balance.Index] = balance.Balance
 	}
 
@@ -487,59 +516,41 @@ func updateValidatorPerformance() error {
 		return fmt.Errorf("error retrieving validator performance data: %w", err)
 	}
 
-	type depositByEpochRange struct {
-		Index        uint64 `db:"validatorindex"`
-		EpochRange   uint64 `db:"epochrange"`
-		DepositTotal uint64 `db:"deposittotal"`
-	}
-
-	// get total deposit-amounts from specific epochs up to the current epoch
-	var depositsByEpochRange []*depositByEpochRange
-	err = tx.Select(&depositsByEpochRange, `
-		SELECT
-			validatorindex,
-			epochrange,
-			MAX(deposittotal) as deposittotal
-		FROM 
-		(
-			SELECT DISTINCT
-				validatorindex,
-				CASE
-					WHEN (d.block_slot/32)-1 <= $5 THEN $5
-					WHEN (d.block_slot/32)-1 <= $4 THEN $4
-					WHEN (d.block_slot/32)-1 <= $3 THEN $3
-					WHEN (d.block_slot/32)-1 <= $2 THEN $2
-					ELSE $1
-				END AS epochrange,
-				SUM(d.amount) OVER (
-					PARTITION BY d.publickey 
-					ORDER BY d.block_slot DESC
-				) AS deposittotal
-			FROM validators
-				INNER JOIN blocks_deposits d
-					ON d.publickey = validators.pubkey
-					AND (d.block_slot/32) > validators.activationepoch
-		) a
-		GROUP BY epochrange, validatorindex`,
-		currentEpoch, epoch1d, epoch7d, epoch31d, epoch365d)
-	if err != nil {
-		return fmt.Errorf("error retrieving validator deposits data: %w", err)
-	}
-
-	depositsMap := make(map[uint64]map[int64]int64)
-	for _, deposit := range depositsByEpochRange {
-		if _, exists := depositsMap[deposit.Index]; !exists {
-			depositsMap[deposit.Index] = make(map[int64]int64)
-		}
-		depositsMap[deposit.Index][int64(deposit.EpochRange)] = int64(deposit.DepositTotal)
-	}
-
 	performance := make(map[uint64]map[int64]int64)
 	for _, balance := range balances {
 		if performance[balance.Index] == nil {
 			performance[balance.Index] = make(map[int64]int64)
 		}
 		performance[balance.Index][int64(balance.Epoch)] = int64(balance.Balance)
+	}
+
+	deposits := []struct {
+		Validatorindex uint64
+		Epoch          int64
+		Amount         int64
+	}{}
+
+	err = tx.Select(&deposits, `
+		SELECT
+			v.validatorindex,
+			(d.block_slot/32) AS epoch,
+			SUM(d.amount) AS amount
+		FROM validators v
+			INNER JOIN blocks_deposits d
+				ON d.publickey = v.pubkey
+				AND (d.block_slot/32) > v.activationepoch
+		GROUP BY (d.block_slot/32), v.validatorindex
+		ORDER BY epoch`)
+	if err != nil {
+		return fmt.Errorf("error retrieving validator deposits data: %w", err)
+	}
+
+	depositsMap := make(map[uint64]map[int64]int64)
+	for _, d := range deposits {
+		if _, exists := depositsMap[d.Validatorindex]; !exists {
+			depositsMap[d.Validatorindex] = make(map[int64]int64)
+		}
+		depositsMap[d.Validatorindex][d.Epoch] = d.Amount
 	}
 
 	for validator, balances := range performance {
@@ -552,19 +563,19 @@ func updateValidatorPerformance() error {
 		}
 
 		balance1d := balances[epoch1d]
-		if balance1d == 0 {
+		if balance1d == 0 || startEpochMap[validator] > epoch1d {
 			balance1d = startBalance
 		}
 		balance7d := balances[epoch7d]
-		if balance7d == 0 {
+		if balance7d == 0 || startEpochMap[validator] > epoch7d {
 			balance7d = startBalance
 		}
 		balance31d := balances[epoch31d]
-		if balance31d == 0 {
+		if balance31d == 0 || startEpochMap[validator] > epoch31d {
 			balance31d = startBalance
 		}
 		balance365d := balances[epoch365d]
-		if balance365d == 0 {
+		if balance365d == 0 || startEpochMap[validator] > epoch365d {
 			balance365d = startBalance
 		}
 
@@ -574,46 +585,20 @@ func updateValidatorPerformance() error {
 		performance365d := currentBalance - balance365d
 
 		if depositsMap[validator] != nil {
-			if d, exists := depositsMap[validator][epoch1d]; exists {
-				performance1d -= d
+			for depositEpoch, depositAmount := range depositsMap[validator] {
+				if depositEpoch > epoch1d {
+					performance1d -= depositAmount
+				}
+				if depositEpoch > epoch7d {
+					performance7d -= depositAmount
+				}
+				if depositEpoch > epoch31d {
+					performance31d -= depositAmount
+				}
+				if depositEpoch > epoch365d {
+					performance365d -= depositAmount
+				}
 			}
-
-			if d, exists := depositsMap[validator][epoch7d]; exists {
-				performance7d -= d
-			} else if d, exists := depositsMap[validator][epoch1d]; exists {
-				performance7d -= d
-			}
-
-			if d, exists := depositsMap[validator][epoch31d]; exists {
-				performance31d -= d
-			} else if d, exists := depositsMap[validator][epoch7d]; exists {
-				performance31d -= d
-			} else if d, exists := depositsMap[validator][epoch1d]; exists {
-				performance31d -= d
-			}
-
-			if d, exists := depositsMap[validator][epoch365d]; exists {
-				performance365d -= d
-			} else if d, exists := depositsMap[validator][epoch31d]; exists {
-				performance365d -= d
-			} else if d, exists := depositsMap[validator][epoch7d]; exists {
-				performance365d -= d
-			} else if d, exists := depositsMap[validator][epoch1d]; exists {
-				performance365d -= d
-			}
-		}
-
-		if performance1d > 10000000 {
-			performance1d = 0
-		}
-		if performance7d > 10000000*7 {
-			performance7d = 0
-		}
-		if performance31d > 10000000*31 {
-			performance31d = 0
-		}
-		if performance365d > 10000000*365 {
-			performance365d = 0
 		}
 
 		_, err := tx.Exec(`
@@ -627,4 +612,154 @@ func updateValidatorPerformance() error {
 	}
 
 	return tx.Commit()
+}
+
+func networkLivenessUpdater(client rpc.Client) {
+	var prevHeadEpoch uint64
+	err := db.DB.Get(&prevHeadEpoch, "SELECT COALESCE(MAX(headepoch), 0) FROM network_liveness")
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	epochDuration := time.Second * time.Duration(utils.Config.Chain.SecondsPerSlot*utils.Config.Chain.SlotsPerEpoch)
+	slotDuration := time.Second * time.Duration(utils.Config.Chain.SecondsPerSlot)
+
+	for {
+		head, err := client.GetChainHead()
+		if err != nil {
+			logger.Errorf("error getting chainhead when exporting networkliveness: %v", err)
+			time.Sleep(slotDuration)
+			continue
+		}
+
+		if prevHeadEpoch == head.HeadEpoch {
+			time.Sleep(slotDuration)
+			continue
+		}
+
+		// wait for node to be synced
+		if time.Now().Add(-epochDuration).After(utils.EpochToTime(head.HeadEpoch)) {
+			time.Sleep(slotDuration)
+			continue
+		}
+
+		_, err = db.DB.Exec(`
+			INSERT INTO network_liveness (ts, headepoch, finalizedepoch, justifiedepoch, previousjustifiedepoch)
+			VALUES (NOW(), $1, $2, $3, $4)`,
+			head.HeadEpoch, head.FinalizedEpoch, head.JustifiedEpoch, head.PreviousJustifiedEpoch)
+		if err != nil {
+			logger.Errorf("error saving networkliveness: %v", err)
+		} else {
+			logger.Printf("updated networkliveness for epoch %v", head.HeadEpoch)
+			prevHeadEpoch = head.HeadEpoch
+		}
+
+		time.Sleep(slotDuration)
+	}
+}
+
+func genesisDepositsExporter() {
+	for {
+		// check if the beaconchain has started
+		latestEpoch := services.LatestEpoch()
+		if latestEpoch == 0 {
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		// check if genesis-deposits have already been exported
+		var genesisDepositsCount uint64
+		err := db.DB.Get(&genesisDepositsCount, "SELECT COUNT(*) FROM blocks_deposits WHERE block_slot=0")
+		if err != nil {
+			logger.Errorf("error retrieving genesis-deposits-count when exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		// if genesis-deposits have already been exported exit this go-routine
+		if genesisDepositsCount > 0 {
+			return
+		}
+
+		// get genesis-validators-count
+		var genesisValidatorsCount uint64
+		err = db.DB.Get(&genesisValidatorsCount, "SELECT validatorscount FROM epochs WHERE epoch=0")
+		if err != nil {
+			logger.Errorf("error retrieving validatorscount for genesis-epoch when exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		// check if eth1-deposits have already been exported
+		var missingEth1Deposits uint64
+		err = db.DB.Get(&missingEth1Deposits, `
+			SELECT COUNT(*)
+			FROM validators v
+			LEFT JOIN ( 
+				SELECT DISTINCT ON (publickey) publickey, signature FROM eth1_deposits 
+			) d ON d.publickey = v.pubkey
+			WHERE d.publickey IS NULL AND v.validatorindex < $1`, genesisValidatorsCount)
+		if err != nil {
+			logger.Errorf("error retrieving missing-eth1-deposits-count when exporting genesis-deposits")
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		if missingEth1Deposits > 0 {
+			logger.Infof("delaying export of genesis-deposits until eth1-deposits have been exported")
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		tx, err := db.DB.Beginx()
+		if err != nil {
+			logger.Errorf("error beginning db-tx when exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		// export genesis-deposits from eth1-deposits and data already gathered from the eth2-client
+		_, err = tx.Exec(`
+				INSERT INTO blocks_deposits (block_slot, block_index, publickey, withdrawalcredentials, amount, signature)
+				SELECT
+					0 as block_slot,
+					v.validatorindex as block_index,
+					v.pubkey as publickey,
+					v.withdrawalcredentials,
+					b.balance as amount,
+					d.signature as signature
+				FROM validators v
+				LEFT JOIN validator_balances b 
+					ON v.validatorindex = b.validatorindex
+					AND b.epoch = 0
+				LEFT JOIN ( 
+					SELECT DISTINCT ON (publickey) publickey, signature FROM eth1_deposits 
+				) d ON d.publickey = v.pubkey
+				WHERE v.validatorindex < $1`, genesisValidatorsCount)
+		if err != nil {
+			tx.Rollback()
+			logger.Errorf("error exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		// update deposits-count
+		_, err = tx.Exec("UPDATE blocks SET depositscount = $1 WHERE slot = 0", genesisValidatorsCount)
+		if err != nil {
+			tx.Rollback()
+			logger.Errorf("error exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			logger.Errorf("error committing db-tx when exporting genesis-deposits: %v", err)
+			time.Sleep(time.Second * 60)
+			continue
+		}
+
+		logger.Infof("exported genesis-deposits for %v genesis-validators", genesisValidatorsCount)
+		return
+	}
 }

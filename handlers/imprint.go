@@ -29,10 +29,16 @@ func Imprint(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/imprint",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "imprint",
-		Data:               nil,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "imprint",
+		Data:                  nil,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	err = imprintTemplate.ExecuteTemplate(w, "layout", data)

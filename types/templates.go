@@ -11,11 +11,17 @@ import (
 
 // PageData is a struct to hold web page data
 type PageData struct {
-	Active             string
-	Meta               *Meta
-	ShowSyncingMessage bool
-	Data               interface{}
-	Version            string
+	Active                string
+	Meta                  *Meta
+	ShowSyncingMessage    bool
+	Data                  interface{}
+	Version               string
+	ChainSlotsPerEpoch    uint64
+	ChainSecondsPerSlot   uint64
+	ChainGenesisTimestamp uint64
+	CurrentEpoch          uint64
+	CurrentSlot           uint64
+	FinalizationDelay     uint64
 }
 
 // Meta is a struct to hold metadata about the page
@@ -27,6 +33,16 @@ type Meta struct {
 	Tdata1      string
 	Tlabel2     string
 	Tdata2      string
+}
+
+//LatestState is a struct to hold data for the banner
+type LatestState struct {
+	LastProposedSlot      uint64 `json:"lastProposedSlot"`
+	CurrentSlot           uint64 `json:"currentSlot"`
+	CurrentEpoch          uint64 `json:"currentEpoch"`
+	CurrentFinalizedEpoch uint64 `json:"currentFinalizedEpoch"`
+	FinalityDelay         uint64 `json:"finalityDelay"`
+	IsSyncing             bool   `json:"syncing"`
 }
 
 // IndexPageData is a struct to hold info for the main web page
@@ -64,6 +80,7 @@ type IndexPageDataBlocks struct {
 	Status             uint64        `db:"status" json:"status"`
 	StatusFormatted    template.HTML `json:"status_formatted"`
 	Votes              uint64        `db:"votes" json:"votes"`
+	Graffiti           []byte        `db:"graffiti"`
 }
 
 // IndexPageEpochHistory is a struct to hold the epoch history for the main web page
@@ -119,10 +136,13 @@ type ValidatorPageData struct {
 	Epoch                            uint64 `db:"epoch"`
 	ValidatorIndex                   uint64 `db:"validatorindex"`
 	PublicKey                        []byte
-	WithdrawableEpoch                uint64  `db:"withdrawableepoch"`
-	CurrentBalance                   uint64  `db:"balance"`
-	EffectiveBalance                 uint64  `db:"effectivebalance"`
-	Slashed                          bool    `db:"slashed"`
+	WithdrawableEpoch                uint64 `db:"withdrawableepoch"`
+	CurrentBalance                   uint64 `db:"balance"`
+	EffectiveBalance                 uint64 `db:"effectivebalance"`
+	Slashed                          bool   `db:"slashed"`
+	SlashedBy                        uint64
+	SlashedAt                        uint64
+	SlashedFor                       string
 	ActivationEligibilityEpoch       uint64  `db:"activationeligibilityepoch"`
 	ActivationEpoch                  uint64  `db:"activationepoch"`
 	ExitEpoch                        uint64  `db:"exitepoch"`
@@ -137,12 +157,15 @@ type ValidatorPageData struct {
 	AttestationsCount                uint64
 	StatusProposedCount              uint64
 	StatusMissedCount                uint64
+	DepositsCount                    uint64
+	SlashingsCount                   uint64
 	Income1d                         int64
 	Income7d                         int64
 	Income31d                        int64
-	DailyProposalCount               []DailyProposalCount
+	Proposals                        [][]uint64
 	BalanceHistoryChartData          [][]float64
 	EffectiveBalanceHistoryChartData [][]float64
+	Deposits                         *ValidatorDeposits
 }
 
 // DailyProposalCount is a struct for the daily proposal count data
@@ -210,6 +233,14 @@ type VisChartData struct {
 	Difficulty uint64   `json:"difficulty"`
 }
 
+type GraffitiwallData struct {
+	X         uint64 `db:"x" json:"x"`
+	Y         uint64 `db:"y" json:"y"`
+	Color     string `db:"color" json:"color"`
+	Slot      uint64 `db:"slot" json:"slot"`
+	Validator uint64 `db:"validator" json:"validator"`
+}
+
 // VisVotesPageData is a struct for the visualization votes page data
 type VisVotesPageData struct {
 	ChartData []*VotesVisChartData
@@ -249,10 +280,12 @@ type BlockPageData struct {
 	SlashingsCount         uint64
 	VotesCount             uint64
 
-	Attestations   []*BlockPageAttestation // Attestations included in this block
-	Deposits       []*BlockPageDeposit
-	VoluntaryExits []*BlockPageVoluntaryExits
-	Votes          []*BlockVote // Attestations that voted for that block
+	Attestations      []*BlockPageAttestation // Attestations included in this block
+	Deposits          []*BlockPageDeposit
+	VoluntaryExits    []*BlockPageVoluntaryExits
+	Votes             []*BlockVote // Attestations that voted for that block
+	AttesterSlashings []*BlockPageAttesterSlashing
+	ProposerSlashings []*BlockPageProposerSlashing
 }
 
 func (u *BlockPageData) MarshalJSON() ([]byte, error) {
@@ -309,6 +342,48 @@ type BlockPageDeposit struct {
 type BlockPageVoluntaryExits struct {
 	ValidatorIndex uint64 `db:"validatorindex"`
 	Signature      []byte `db:"signature"`
+}
+
+// BlockPageAttesterSlashing is a struct to hold data for attester slashings on the block page
+type BlockPageAttesterSlashing struct {
+	BlockSlot                   uint64        `db:"block_slot"`
+	BlockIndex                  uint64        `db:"block_index"`
+	Attestation1Indices         pq.Int64Array `db:"attestation1_indices"`
+	Attestation1Signature       []byte        `db:"attestation1_signature"`
+	Attestation1Slot            uint64        `db:"attestation1_slot"`
+	Attestation1Index           uint64        `db:"attestation1_index"`
+	Attestation1BeaconBlockRoot []byte        `db:"attestation1_beaconblockroot"`
+	Attestation1SourceEpoch     uint64        `db:"attestation1_source_epoch"`
+	Attestation1SourceRoot      []byte        `db:"attestation1_source_root"`
+	Attestation1TargetEpoch     uint64        `db:"attestation1_target_epoch"`
+	Attestation1TargetRoot      []byte        `db:"attestation1_target_root"`
+	Attestation2Indices         pq.Int64Array `db:"attestation2_indices"`
+	Attestation2Signature       []byte        `db:"attestation2_signature"`
+	Attestation2Slot            uint64        `db:"attestation2_slot"`
+	Attestation2Index           uint64        `db:"attestation2_index"`
+	Attestation2BeaconBlockRoot []byte        `db:"attestation2_beaconblockroot"`
+	Attestation2SourceEpoch     uint64        `db:"attestation2_source_epoch"`
+	Attestation2SourceRoot      []byte        `db:"attestation2_source_root"`
+	Attestation2TargetEpoch     uint64        `db:"attestation2_target_epoch"`
+	Attestation2TargetRoot      []byte        `db:"attestation2_target_root"`
+	SlashedValidators           []int64
+}
+
+// BlockPageProposerSlashing is a struct to hold data for proposer slashings on the block page
+type BlockPageProposerSlashing struct {
+	BlockSlot         uint64 `db:"block_slot"`
+	BlockIndex        uint64 `db:"block_index"`
+	ProposerIndex     uint64 `db:"proposerindex"`
+	Header1Slot       uint64 `db:"header1_slot"`
+	Header1ParentRoot []byte `db:"header1_parentroot"`
+	Header1StateRoot  []byte `db:"header1_stateroot"`
+	Header1BodyRoot   []byte `db:"header1_bodyroot"`
+	Header1Signature  []byte `db:"header1_signature"`
+	Header2Slot       uint64 `db:"header2_slot"`
+	Header2ParentRoot []byte `db:"header2_parentroot"`
+	Header2StateRoot  []byte `db:"header2_stateroot"`
+	Header2BodyRoot   []byte `db:"header2_bodyroot"`
+	Header2Signature  []byte `db:"header2_signature"`
 }
 
 // DataTableResponse is a struct to hold data for data table responses
@@ -378,9 +453,14 @@ type SearchAheadBlocksResult []struct {
 
 // SearchAheadGraffitiResult is a struct to hold the search ahead blocks results with a given graffiti
 type SearchAheadGraffitiResult []struct {
-	Slot     string `db:"slot" json:"slot,omitempty"`
 	Graffiti string `db:"graffiti" json:"graffiti,omitempty"`
-	Root     string `db:"blockroot" json:"blockroot,omitempty"`
+	Count    string `db:"count" json:"count,omitempty"`
+}
+
+// SearchAheadEth1Result is a struct to hold the search ahead eth1 results
+type SearchAheadEth1Result []struct {
+	Publickey   string `db:"publickey" json:"publickey,omitempty"`
+	Eth1Address string `db:"from_address" json:"address,omitempty"`
 }
 
 // SearchAheadValidatorsResult is a struct to hold the search ahead validators results
@@ -391,20 +471,48 @@ type SearchAheadValidatorsResult []struct {
 
 // GenericChartData is a struct to hold chart data
 type GenericChartData struct {
-	Title        string                    `json:"title"`
-	Subtitle     string                    `json:"subtitle"`
-	XAxisTitle   string                    `json:"x_axis_title"`
-	YAxisTitle   string                    `json:"y_axis_title"`
-	StackingMode string                    `json:"stacking_mode"`
-	Series       []*GenericChartDataSeries `json:"series"`
+	IsNormalChart                   bool
+	ShowGapHider                    bool
+	XAxisLabelsFormatter            template.JS
+	TooltipFormatter                template.JS
+	PlotOptionsSeriesEventsClick    template.JS
+	PlotOptionsSeriesCursor         string
+	Title                           string                    `json:"title"`
+	Subtitle                        string                    `json:"subtitle"`
+	XAxisTitle                      string                    `json:"x_axis_title"`
+	YAxisTitle                      string                    `json:"y_axis_title"`
+	Type                            string                    `json:"type"`
+	StackingMode                    string                    `json:"stacking_mode"`
+	ColumnDataGroupingApproximation string                    // "average", "averages", "open", "high", "low", "close" and "sum"
+	Series                          []*GenericChartDataSeries `json:"series"`
 }
 
 // GenericChartDataSeries is a struct to hold chart series data
 type GenericChartDataSeries struct {
-	Name string      `json:"name"`
-	Data [][]float64 `json:"data"`
+	Name  string      `json:"name"`
+	Data  interface{} `json:"data"`
+	Stack string      `json:"stack,omitempty"`
+	Type  string      `json:"type,omitempty"`
 }
 
+// ChartsPageData is an array to hold charts for the charts-page
+type ChartsPageData []*ChartsPageDataChart
+
+// ChartsPageDataChart is a struct to hold a chart for the charts-page
+type ChartsPageDataChart struct {
+	Order int
+	Path  string
+	Data  *GenericChartData
+}
+
+// DashboardData is a struct to hold data for the dashboard-page
+type DashboardData struct {
+	BalanceHistory DashboardValidatorBalanceHistory `json:"balance_history"`
+	Earnings       ValidatorEarnings                `json:"earnings"`
+	Validators     [][]interface{}                  `json:"validators"`
+}
+
+// DashboardValidatorBalanceHistory is a struct to hold data for the balance-history on the dashboard-page
 type DashboardValidatorBalanceHistory struct {
 	Epoch            uint64  `db:"epoch"`
 	Balance          uint64  `db:"balance"`
@@ -412,9 +520,69 @@ type DashboardValidatorBalanceHistory struct {
 	ValidatorCount   float64 `db:"validatorcount"`
 }
 
-type DashboardEarnings struct {
+// ValidatorEarnings is a struct to hold the earnings of one or multiple validators
+type ValidatorEarnings struct {
 	Total     int64 `json:"total"`
 	LastDay   int64 `json:"lastDay"`
 	LastWeek  int64 `json:"lastWeek"`
 	LastMonth int64 `json:"lastMonth"`
+}
+
+// ValidatorAttestationSlashing is a struct to hold data of an attestation-slashing
+type ValidatorAttestationSlashing struct {
+	Epoch                  uint64        `db:"epoch" json:"epoch,omitempty"`
+	Slot                   uint64        `db:"slot" json:"slot,omitempty"`
+	Proposer               uint64        `db:"proposer" json:"proposer,omitempty"`
+	Attestestation1Indices pq.Int64Array `db:"attestation1_indices" json:"attestation1_indices,omitempty"`
+	Attestestation2Indices pq.Int64Array `db:"attestation2_indices" json:"attestation2_indices,omitempty"`
+}
+
+type ValidatorProposerSlashing struct {
+	Epoch         uint64 `db:"epoch" json:"epoch,omitempty"`
+	Slot          uint64 `db:"slot" json:"slot,omitempty"`
+	Proposer      uint64 `db:"proposer" json:"proposer,omitempty"`
+	ProposerIndex uint64 `db:"proposerindex" json:"proposer_index,omitempty"`
+}
+
+type ValidatorSlashing struct {
+	Epoch                  uint64        `db:"epoch" json:"epoch,omitempty"`
+	Slot                   uint64        `db:"slot" json:"slot,omitempty"`
+	Proposer               uint64        `db:"proposer" json:"proposer,omitempty"`
+	SlashedValidator       *uint64       `db:"slashedvalidator" json:"slashed_validator,omitempty"`
+	Attestestation1Indices pq.Int64Array `db:"attestation1_indices" json:"attestation1_indices,omitempty"`
+	Attestestation2Indices pq.Int64Array `db:"attestation2_indices" json:"attestation2_indices,omitempty"`
+	Type                   string        `db:"type" json:"type"`
+}
+
+// EpochsPageData is a struct to hold epoch data for the epochs page
+type EthOneDepositsPageData struct {
+	TxHash                []byte    `db:"tx_hash"`
+	TxInput               []byte    `db:"tx_input"`
+	TxIndex               uint64    `db:"tx_index"`
+	BlockNumber           uint64    `db:"block_number"`
+	BlockTs               time.Time `db:"block_ts"`
+	FromAddress           []byte    `db:"from_address"`
+	PublicKey             []byte    `db:"publickey"`
+	WithdrawalCredentials []byte    `db:"withdrawal_credentials"`
+	Amount                uint64    `db:"amount"`
+	Signature             []byte    `db:"signature"`
+	MerkletreeIndex       []byte    `db:"merkletree_index"`
+	State                 string    `db:"state"`
+	ValidSignature        bool      `db:"valid_signature"`
+}
+
+type EthTwoDepositsPageData struct {
+	BlockSlot             uint64 `db:"block_slot"`
+	BlockIndex            uint64 `db:"block_index"`
+	Proof                 []byte `db:"proof"`
+	Publickey             []byte `db:"publickey"`
+	ValidatorIndex        uint64 `db:"validatorindex"`
+	Withdrawalcredentials []byte `db:"withdrawalcredentials"`
+	Amount                uint64 `db:"amount"`
+	Signature             []byte `db:"signature"`
+}
+
+type ValidatorDeposits struct {
+	Eth1Deposits []Eth1Deposit
+	Eth2Deposits []Eth2Deposit
 }

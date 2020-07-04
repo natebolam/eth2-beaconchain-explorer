@@ -12,8 +12,11 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/juliangruber/go-intersect"
 
 	"github.com/gorilla/mux"
 )
@@ -23,51 +26,72 @@ var blockNotFoundTemplate = template.Must(template.New("blocknotfound").ParseFil
 
 // Block will return the data for a block
 func Block(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
 
 	vars := mux.Vars(r)
+
 	slotOrHash := strings.Replace(vars["slotOrHash"], "0x", "", -1)
-
-	blockPageData := types.BlockPageData{}
-
+	blockSlot := int64(-1)
 	blockRootHash, err := hex.DecodeString(slotOrHash)
-
-	if err == nil && len(slotOrHash) == 64 {
-		slotOrHash = "-1"
+	if err != nil || len(slotOrHash) != 64 {
+		blockRootHash = []byte{}
+		blockSlot, err = strconv.ParseInt(vars["slotOrHash"], 10, 64)
 	}
-
-	err = db.DB.Get(&blockPageData, `
-	SELECT 
-			epoch, 
-			slot, 
-			blockroot, 
-			parentroot, 
-			stateroot, 
-			signature, 
-			randaoreveal, 
-			graffiti, 
-			eth1data_depositroot, 
-			eth1data_depositcount, 
-			eth1data_blockhash, 
-			proposerslashingscount, 
-			attesterslashingscount,
-			attestationscount, 
-			depositscount, 
-			voluntaryexitscount, 
-			proposer,
-			status   
-	FROM blocks 
-	WHERE slot = $1 OR blockroot = $2 ORDER BY status LIMIT 1`,
-		slotOrHash, blockRootHash)
 
 	data := &types.PageData{
 		Meta: &types.Meta{
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "blocks",
-		Data:               nil,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "blocks",
+		Data:                  nil,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
+
+	if err != nil {
+		data.Meta.Title = fmt.Sprintf("%v - Slot %v - beaconcha.in - %v", utils.Config.Frontend.SiteName, slotOrHash, time.Now().Year())
+		data.Meta.Path = "/block/" + slotOrHash
+		logger.Errorf("error retrieving block data: %v", err)
+		err = blockNotFoundTemplate.ExecuteTemplate(w, "layout", data)
+
+		if err != nil {
+			logger.Errorf("error executing template for %v route: %v", r.URL.String(), err)
+			http.Error(w, "Internal server error", 503)
+			return
+		}
+		return
+	}
+
+	blockPageData := types.BlockPageData{}
+	err = db.DB.Get(&blockPageData, `
+		SELECT
+			epoch,
+			slot,
+			blockroot,
+			parentroot,
+			stateroot,
+			signature,
+			randaoreveal,
+			graffiti,
+			eth1data_depositroot,
+			eth1data_depositcount,
+			eth1data_blockhash,
+			proposerslashingscount,
+			attesterslashingscount,
+			attestationscount,
+			depositscount,
+			voluntaryexitscount,
+			proposer,
+			status
+		FROM blocks
+		WHERE slot = $1 OR blockroot = $2 ORDER BY status LIMIT 1`,
+		blockSlot, blockRootHash)
 
 	if err != nil {
 		data.Meta.Title = fmt.Sprintf("%v - Slot %v - beaconcha.in - %v", utils.Config.Frontend.SiteName, slotOrHash, time.Now().Year())
@@ -101,21 +125,23 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var attestations []*types.BlockPageAttestation
-	rows, err := db.DB.Query(`SELECT    block_slot,
-											 block_index,
-											 aggregationbits, 
-											 validators, 
-											 signature, 
-											 slot, 
-											 committeeindex, 
-											 beaconblockroot, 
-											 source_epoch, 
-											 source_root, 
-											 target_epoch, 
-											 target_root 
-										FROM blocks_attestations 
-												WHERE block_slot = $1 
-												ORDER BY block_index`,
+	rows, err := db.DB.Query(`
+		SELECT
+			block_slot,
+			block_index,
+			aggregationbits,
+			validators,
+			signature,
+			slot,
+			committeeindex,
+			beaconblockroot,
+			source_epoch,
+			source_root,
+			target_epoch,
+			target_root
+		FROM blocks_attestations
+		WHERE block_slot = $1
+		ORDER BY block_index`,
 		blockPageData.Slot)
 	if err != nil {
 		logger.Errorf("error retrieving block attestation data: %v", err)
@@ -150,12 +176,14 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	blockPageData.Attestations = attestations
 
 	var votes []*types.BlockVote
-	rows, err = db.DB.Query(`SELECT    block_slot,
-											 validators, 
-											 committeeindex
-										FROM blocks_attestations 
-										WHERE beaconblockroot = $1 
-										ORDER BY committeeindex`,
+	rows, err = db.DB.Query(`
+		SELECT
+			block_slot,
+			validators,
+			committeeindex
+		FROM blocks_attestations
+		WHERE beaconblockroot = $1
+		ORDER BY committeeindex`,
 		blockPageData.BlockRoot)
 	if err != nil {
 		logger.Errorf("error retrieving block votes data: %v", err)
@@ -191,13 +219,15 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	blockPageData.VotesCount = uint64(len(blockPageData.Votes))
 
 	var deposits []*types.BlockPageDeposit
-	err = db.DB.Select(&deposits, `SELECT publickey, 
-												     withdrawalcredentials, 
-												     amount, 
-												     signature
-												FROM blocks_deposits 
-												WHERE block_slot = $1 
-												ORDER BY block_index`,
+	err = db.DB.Select(&deposits, `
+		SELECT
+			publickey,
+			withdrawalcredentials,
+			amount,
+			signature
+		FROM blocks_deposits
+		WHERE block_slot = $1
+		ORDER BY block_index`,
 		blockPageData.Slot)
 	if err != nil {
 		logger.Errorf("error retrieving block deposit data: %v", err)
@@ -210,6 +240,53 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	err = db.DB.Select(&blockPageData.VoluntaryExits, "SELECT validatorindex, signature FROM blocks_voluntaryexits WHERE block_slot = $1", blockPageData.Slot)
 	if err != nil {
 		logger.Errorf("error retrieving block deposit data: %v", err)
+		http.Error(w, "Internal server error", 503)
+		return
+	}
+
+	err = db.DB.Select(&blockPageData.AttesterSlashings, `
+		SELECT
+			block_slot,
+			block_index,
+			attestation1_indices,
+			attestation1_signature,
+			attestation1_slot,
+			attestation1_index,
+			attestation1_beaconblockroot,
+			attestation1_source_epoch,
+			attestation1_source_root,
+			attestation1_target_epoch,
+			attestation1_target_root,
+		    attestation2_indices,
+			attestation2_signature,
+			attestation2_slot,
+			attestation2_index,
+			attestation2_beaconblockroot,
+			attestation2_source_epoch,
+			attestation2_source_root,
+			attestation2_target_epoch,
+			attestation2_target_root
+			FROM blocks_attesterslashings
+		WHERE block_slot = $1`, blockPageData.Slot)
+	if err != nil {
+		logger.Errorf("error retrieving block attester slashings data: %v", err)
+		http.Error(w, "Internal server error", 503)
+		return
+	}
+
+	if len(blockPageData.AttesterSlashings) > 0 {
+		for _, slashing := range blockPageData.AttesterSlashings {
+			inter := intersect.Simple(slashing.Attestation1Indices, slashing.Attestation2Indices)
+
+			for _, i := range inter {
+				slashing.SlashedValidators = append(slashing.SlashedValidators, i.(int64))
+			}
+		}
+	}
+
+	err = db.DB.Select(&blockPageData.ProposerSlashings, "SELECT * FROM blocks_proposerslashings WHERE block_slot = $1", blockPageData.Slot)
+	if err != nil {
+		logger.Errorf("error retrieving block proposer slashings data: %v", err)
 		http.Error(w, "Internal server error", 503)
 		return
 	}

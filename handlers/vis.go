@@ -30,10 +30,16 @@ func Vis(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/blocks",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "vis",
-		Data:               nil,
-		Version:            version.Version,
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "stats",
+		Data:                  nil,
+		Version:               version.Version,
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	err = visTemplate.ExecuteTemplate(w, "layout", data)
@@ -140,9 +146,12 @@ func VisVotes(w http.ResponseWriter, r *http.Request) {
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/blocks",
 		},
-		ShowSyncingMessage: services.IsSyncing(),
-		Active:             "vis",
-		Data:               &types.VisVotesPageData{ChartData: chartData},
+		ShowSyncingMessage:    services.IsSyncing(),
+		Active:                "vis",
+		Data:                  &types.VisVotesPageData{ChartData: chartData},
+		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
+		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
+		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
 	}
 
 	err = visVotesTemplate.ExecuteTemplate(w, "layout", data)

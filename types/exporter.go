@@ -61,9 +61,11 @@ type Validator struct {
 
 // ValidatorQueue is a struct to hold validator queue data
 type ValidatorQueue struct {
-	ChurnLimit           uint64
-	ActivationPublicKeys [][]byte
-	ExitPublicKeys       [][]byte
+	ChurnLimit                 uint64
+	ActivationPublicKeys       [][]byte
+	ExitPublicKeys             [][]byte
+	ActivationValidatorIndices []uint64
+	ExitValidatorIndices       []uint64
 }
 
 // Block is a struct to hold block data
@@ -108,8 +110,9 @@ type AttesterSlashing struct {
 
 // IndexedAttestation is a struct to hold indexed attestation data
 type IndexedAttestation struct {
-	Data      *AttestationData
-	Signature []byte
+	Data             *AttestationData
+	AttestingIndices []uint64
+	Signature        []byte
 }
 
 // Attestation is a struct to hold attestation header data
@@ -178,4 +181,32 @@ type BlockComparisonContainer struct {
 type EpochAssignments struct {
 	ProposerAssignments map[uint64]uint64
 	AttestorAssignments map[string]uint64
+}
+
+// Eth1Deposit is a struct to hold eth1-deposit data
+type Eth1Deposit struct {
+	TxHash                []byte `db:"tx_hash"`
+	TxInput               []byte `db:"tx_input"`
+	TxIndex               uint64 `db:"tx_index"`
+	BlockNumber           uint64 `db:"block_number"`
+	BlockTs               int64  `db:"block_ts"`
+	FromAddress           []byte `db:"from_address"`
+	PublicKey             []byte `db:"publickey"`
+	WithdrawalCredentials []byte `db:"withdrawal_credentials"`
+	Amount                uint64 `db:"amount"`
+	Signature             []byte `db:"signature"`
+	MerkletreeIndex       []byte `db:"merkletree_index"`
+	Removed               bool   `db:"removed"`
+	ValidSignature        bool   `db:"valid_signature"`
+}
+
+// Eth2Deposit is a struct to hold eth2-deposit data
+type Eth2Deposit struct {
+	BlockSlot             uint64 `db:"block_slot"`
+	BlockIndex            uint64 `db:"block_index"`
+	Proof                 []byte `db:"proof"`
+	Publickey             []byte `db:"publickey"`
+	Withdrawalcredentials []byte `db:"withdrawalcredentials"`
+	Amount                uint64 `db:"amount"`
+	Signature             []byte `db:"signature"`
 }
