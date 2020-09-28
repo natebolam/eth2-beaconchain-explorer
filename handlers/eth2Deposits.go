@@ -22,14 +22,17 @@ func Eth2Deposits(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	data := &types.PageData{
+		HeaderAd: true,
 		Meta: &types.Meta{
 			Title:       fmt.Sprintf("%v - Eth1 Deposits - beaconcha.in - %v", utils.Config.Frontend.SiteName, time.Now().Year()),
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/deposits/eth2",
+			GATag:       utils.Config.Frontend.GATag,
 		},
 		Active:                "eth2Deposits",
 		ShowSyncingMessage:    services.IsSyncing(),
 		Data:                  nil,
+		User:                  getUser(w, r),
 		Version:               version.Version,
 		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
 		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,

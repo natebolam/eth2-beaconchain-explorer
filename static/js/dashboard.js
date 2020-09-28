@@ -49,14 +49,64 @@ function appendBlocks(blocks) {
 }
 
 $(document).ready(function() {
+
+  //bookmark button adds all validators in the dashboard to the watchlist
+  $('#bookmark-button').on("click", function(event) {
+    var tickIcon = $("<i class='fas fa-check' style='width:15px;'></i>")
+    var spinnerSmall = $('<div class="spinner-border spinner-border-sm" role="status"><span class="sr-only">Loading...</span></div>')
+    var bookmarkIcon = $("<i class='far fa-bookmark' style='width:15px;'></i>")
+    var errorIcon = $("<i class='fas fa-exclamation' style='width:15px;'></i>")
+    $('#bookmark-button').empty().append(spinnerSmall)
+
+    fetch('/user/dashboard/save', {
+      method: "POST",
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(state.validators),
+    }).then(function(res) {
+      console.log('response', res)
+      if (res.status === 200 && !res.redirected) {
+        // success
+        console.log("success")
+        $('#bookmark-button').empty().append(tickIcon)
+        setTimeout(function() {
+          $('#bookmark-button').empty().append(bookmarkIcon)
+        }, 1000)
+      } else if (res.redirected) {
+        console.log('redirected!')
+        $('#bookmark-button').attr("data-original-title", "Please login or sign up first.")
+        $('#bookmark-button').tooltip('show')
+        $('#bookmark-button').empty().append(errorIcon)
+        setTimeout(function() {
+          $('#bookmark-button').empty().append(bookmarkIcon)
+          $('#bookmark-button').tooltip('hide')
+          $('#bookmark-button').attr("data-original-title", "Save all to Watchlist")
+        }, 2000)
+      } else {
+        // could not bookmark validators
+        $('#bookmark-button').empty().append(errorIcon)
+        setTimeout(function() {
+          $('#bookmark-button').empty().append(bookmarkIcon)
+        }, 2000)
+      }
+    }).catch(function(err) {
+      $('#bookmark-button').empty().append(errorIcon)
+      setTimeout(function() {
+        $('#bookmark-button').empty().append(bookmarkIcon)
+      }, 2000)
+      console.log(err)
+    })
+  })
+
   var clipboard = new ClipboardJS('#copy-button');
 
   var copyButton = $('#copy-button')
   var clearSearch = $('#clear-search')
   //'<i class="fa fa-copy"></i>'
-  copyIcon = $("<i class='fa fa-copy' style='width:15px'></i>")
+  var copyIcon = $("<i class='fa fa-copy' style='width:15px'></i>")
   //'<i class="fas fa-check"></i>'
-  tickIcon = $("<i class='fas fa-check' style='width:15px;'></i>")
+  var tickIcon = $("<i class='fas fa-check' style='width:15px;'></i>")
 
   clipboard.on('success', function (e) {
     copyButton.empty().append(tickIcon);
@@ -210,6 +260,17 @@ $(document).ready(function() {
       wildcard: '%QUERY'
     }
   })
+  var bhName = new Bloodhound({
+    datumTokenizer: Bloodhound.tokenizers.whitespace,
+    queryTokenizer: Bloodhound.tokenizers.whitespace,
+    identify: function(obj) {
+      return obj.name
+    },
+    remote: {
+      url: '/search/indexed_validators_by_name/%QUERY',
+      wildcard: '%QUERY'
+    }
+  })
   var bhGraffiti = new Bloodhound({
     datumTokenizer: Bloodhound.tokenizers.whitespace,
     queryTokenizer: Bloodhound.tokenizers.whitespace,
@@ -237,7 +298,7 @@ $(document).ready(function() {
       templates: {
         header: '<h3>Validators</h3>',
         suggestion: function(data) {
-          return `<div class="text-monospace">${data.index}: ${data.pubkey.substring(0, 16)}…</div>`
+          return `<div class="text-monospace text-truncate">${data.index}: ${data.pubkey}</div>`
         }
       }
     },
@@ -249,10 +310,8 @@ $(document).ready(function() {
       templates: {
         header: '<h3>Validators by ETH1 Addresses</h3>',
         suggestion: function(data) {
-          if (data.validator_indices.length>100) {
-            return `<div class="text-monospace">0x${data.eth1_address.substring(0, 16)}…: 100+</div>`
-          }
-          return `<div class="text-monospace">0x${data.eth1_address.substring(0, 16)}…: ${data.validator_indices.length}</div>`
+          var len = data.validator_indices.length > 100 ? '100+' : data.validator_indices.length 
+          return `<div class="text-monospace" style="display:flex"><div class="text-truncate" style="flex:1 1 auto;">${data.eth1_address}</div><div style="max-width:fit-content;white-space:nowrap;">${len}</div></div>`
         }
       }
     },
@@ -264,10 +323,21 @@ $(document).ready(function() {
       templates: {
         header: '<h3>Validators by Graffiti</h3>',
         suggestion: function(data) {
-          if (data.validator_indices.length>100) {
-            return `<div class="text-monospace">0x${data.graffiti.substring(0, 32)}…: 100+</div>`
-          }
-          return `<div class="text-monospace">0x${data.graffiti.substring(0, 32)}…: ${data.validator_indices.length}</div>`
+          var len = data.validator_indices.length > 100 ? '100+' : data.validator_indices.length 
+          return `<div class="text-monospace" style="display:flex"><div class="text-truncate" style="flex:1 1 auto;">${data.graffiti}</div><div style="max-width:fit-content;white-space:nowrap;">${len}</div></div>`
+        }
+      }
+    },
+    {
+      limit: 5,
+      name: 'name',
+      source: bhName,
+      display: 'name',
+      templates: {
+        header: '<h3>Validators by Name</h3>',
+        suggestion: function(data) {
+          var len = data.validator_indices.length > 100 ? '100+' : data.validator_indices.length 
+          return `<div class="text-monospace" style="display:flex"><div class="text-truncate" style="flex:1 1 auto;">${data.name}</div><div style="max-width:fit-content;white-space:nowrap;">${len}</div></div>`
         }
       }
     }
@@ -478,9 +548,12 @@ $(document).ready(function() {
     // }
 
     localStorage.setItem('dashboard_validators', JSON.stringify(state.validators))
-    var qryStr = '?validators=' + state.validators.join(',')
-    var newUrl = window.location.pathname + qryStr
-    window.history.pushState(null, 'Dashboard', newUrl)
+    if(state.validators.length) {
+      console.log('length', state.validators)
+      var qryStr = '?validators=' + state.validators.join(',')
+      var newUrl = window.location.pathname + qryStr
+      window.history.replaceState(null, 'Dashboard', newUrl)
+    }
     var t0 = Date.now()
     if (state.validators && state.validators.length) {
       // if(state.validators.length >= 9) {
@@ -488,6 +561,7 @@ $(document).ready(function() {
       // } else {
       //   appendBlocks(xBlocks.slice(0, state.validators.length * 3 - 1))
       // }
+      document.querySelector('#bookmark-button').style.visibility = "visible"
       document.querySelector('#copy-button').style.visibility = "visible"
       document.querySelector('#clear-search').style.visibility = "visible"
 
@@ -562,6 +636,7 @@ $(document).ready(function() {
 
     } else {
       document.querySelector('#copy-button').style.visibility = "hidden"
+      document.querySelector('#bookmark-button').style.visibility = "hidden"
       document.querySelector('#clear-search').style.visibility = "hidden"
       // window.location = "/dashboard"
     }

@@ -8,6 +8,7 @@ import (
 	"eth2-exporter/utils"
 	"eth2-exporter/version"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -62,14 +63,17 @@ func Validators(w http.ResponseWriter, r *http.Request) {
 	validatorsPageData.ExitingCount = validatorsPageData.ExitingOnlineCount + validatorsPageData.ExitingOfflineCount
 
 	data := &types.PageData{
+		HeaderAd: true,
 		Meta: &types.Meta{
 			Title:       fmt.Sprintf("%v - Validators - beaconcha.in - %v", utils.Config.Frontend.SiteName, time.Now().Year()),
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/validators",
+			GATag:       utils.Config.Frontend.GATag,
 		},
 		ShowSyncingMessage:    services.IsSyncing(),
 		Active:                "validators",
 		Data:                  validatorsPageData,
+		User:                  getUser(w, r),
 		Version:               version.Version,
 		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
 		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
@@ -243,6 +247,7 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 			validators.activationepoch,
 			validators.exitepoch,
 			validators.lastattestationslot,
+			COALESCE(validators.name, '') AS name,
 			a.state,
 			COALESCE(p1.count,0) AS executedproposals,
 			COALESCE(p2.count,0) AS missedproposals
@@ -322,6 +327,8 @@ func ValidatorsData(w http.ResponseWriter, r *http.Request) {
 			v.ExecutedProposals,
 			v.MissedProposals,
 		})
+
+		tableData[i] = append(tableData[i], html.EscapeString(v.Name))
 	}
 
 	data := &types.DataTableResponse{

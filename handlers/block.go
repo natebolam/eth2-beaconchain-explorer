@@ -39,12 +39,15 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &types.PageData{
+		HeaderAd: true,
 		Meta: &types.Meta{
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
+			GATag:       utils.Config.Frontend.GATag,
 		},
 		ShowSyncingMessage:    services.IsSyncing(),
 		Active:                "blocks",
 		Data:                  nil,
+		User:                  getUser(w, r),
 		Version:               version.Version,
 		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
 		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
@@ -57,7 +60,7 @@ func Block(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		data.Meta.Title = fmt.Sprintf("%v - Slot %v - beaconcha.in - %v", utils.Config.Frontend.SiteName, slotOrHash, time.Now().Year())
 		data.Meta.Path = "/block/" + slotOrHash
-		logger.Errorf("error retrieving block data: %v", err)
+		//logger.Errorf("error retrieving block data: %v", err)
 		err = blockNotFoundTemplate.ExecuteTemplate(w, "layout", data)
 
 		if err != nil {
@@ -88,15 +91,17 @@ func Block(w http.ResponseWriter, r *http.Request) {
 			depositscount,
 			voluntaryexitscount,
 			proposer,
-			status
-		FROM blocks
+			status,
+			COALESCE(validators.name, '') AS name
+		FROM blocks 
+		LEFT JOIN validators ON blocks.proposer = validators.validatorindex
 		WHERE slot = $1 OR blockroot = $2 ORDER BY status LIMIT 1`,
 		blockSlot, blockRootHash)
 
 	if err != nil {
 		data.Meta.Title = fmt.Sprintf("%v - Slot %v - beaconcha.in - %v", utils.Config.Frontend.SiteName, slotOrHash, time.Now().Year())
 		data.Meta.Path = "/block/" + slotOrHash
-		logger.Errorf("error retrieving block data: %v", err)
+		//logger.Errorf("error retrieving block data: %v", err)
 		err = blockNotFoundTemplate.ExecuteTemplate(w, "layout", data)
 
 		if err != nil {
@@ -257,7 +262,7 @@ func Block(w http.ResponseWriter, r *http.Request) {
 			attestation1_source_root,
 			attestation1_target_epoch,
 			attestation1_target_root,
-		    attestation2_indices,
+			attestation2_indices,
 			attestation2_signature,
 			attestation2_slot,
 			attestation2_index,
@@ -266,7 +271,7 @@ func Block(w http.ResponseWriter, r *http.Request) {
 			attestation2_source_root,
 			attestation2_target_epoch,
 			attestation2_target_root
-			FROM blocks_attesterslashings
+		FROM blocks_attesterslashings
 		WHERE block_slot = $1`, blockPageData.Slot)
 	if err != nil {
 		logger.Errorf("error retrieving block attester slashings data: %v", err)

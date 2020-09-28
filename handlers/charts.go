@@ -22,14 +22,17 @@ func Charts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	data := &types.PageData{
+		HeaderAd: true,
 		Meta: &types.Meta{
 			Title:       fmt.Sprintf("%v - Charts - beaconcha.in - %v", utils.Config.Frontend.SiteName, time.Now().Year()),
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
 			Path:        "/charts",
+			GATag:       utils.Config.Frontend.GATag,
 		},
 		ShowSyncingMessage:    services.IsSyncing(),
 		Active:                "stats",
 		Data:                  nil,
+		User:                  getUser(w, r),
 		Version:               version.Version,
 		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
 		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
@@ -65,17 +68,23 @@ func GenericChart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	data := &types.PageData{
+		HeaderAd: true,
 		Meta: &types.Meta{
 			Title:       fmt.Sprintf("Chart - beaconcha.in - %v", time.Now().Year()),
 			Description: "beaconcha.in makes the Ethereum 2.0. beacon chain accessible to non-technical end users",
+			GATag:       utils.Config.Frontend.GATag,
 		},
 		ShowSyncingMessage:    services.IsSyncing(),
 		Active:                "charts",
 		Data:                  nil,
+		User:                  getUser(w, r),
 		Version:               version.Version,
 		ChainSlotsPerEpoch:    utils.Config.Chain.SlotsPerEpoch,
 		ChainSecondsPerSlot:   utils.Config.Chain.SecondsPerSlot,
 		ChainGenesisTimestamp: utils.Config.Chain.GenesisTimestamp,
+		CurrentEpoch:          services.LatestEpoch(),
+		CurrentSlot:           services.LatestSlot(),
+		FinalizationDelay:     services.FinalizationDelay(),
 	}
 
 	chartsPageData := services.LatestChartsPageData()
