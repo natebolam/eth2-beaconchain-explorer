@@ -151,7 +151,7 @@ func getIndexPageData() (*types.IndexPageData, error) {
 
 	// If we are before the genesis block show the first 20 slots by default
 	startSlotTime := utils.SlotToTime(0)
-	genesisTransition := utils.SlotToTime(15)
+	genesisTransition := utils.SlotToTime(160)
 	now := time.Now()
 
 	// run deposit query until the Genesis period is over
@@ -206,7 +206,7 @@ func getIndexPageData() (*types.IndexPageData, error) {
 		data.Genesis = false
 	}
 	// show the transition view one hour before the first slot and until epoch 30 is reached
-	if now.Add(time.Hour*19).After(startSlotTime) && now.Before(genesisTransition) {
+	if now.Add(time.Hour*2).After(startSlotTime) && now.Before(genesisTransition) {
 		data.GenesisPeriod = true
 	} else {
 		data.GenesisPeriod = false
@@ -272,9 +272,11 @@ func getIndexPageData() (*types.IndexPageData, error) {
 	if data.GenesisPeriod {
 		for _, blk := range blocks {
 			if blk.Status != 0 {
-				data.CurrentSlot = blk.Slot + 1
+				data.CurrentSlot = blk.Slot
 			}
 		}
+	} else if len(blocks) > 0 {
+		data.CurrentSlot = blocks[0].Slot
 	}
 
 	for _, block := range data.Blocks {
