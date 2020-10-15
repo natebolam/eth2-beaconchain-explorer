@@ -182,15 +182,7 @@
 			</button>
 			                   
 			<div class="collapse navbar-collapse" id="navbarSupportedContent">
-				<ul class="navbar-nav ml-auto">
-			 		<li class="nav-item">    
-						<a ga-outbound="" class="nav-link text-primary" href="https://gitcoin.co/grants/collections?collection_id=14#">
-							<span class="nav-icon">
-								<img src="/img/gitcoin_logo.svg" style="width: auto; height: 1rem;" class="mb-2"> 
-							</span>
-							<span class="nav-text">Support ETH 2.0</span>
-						</a>
-					</li>		
+				<ul class="navbar-nav ml-auto">	
 					<li class="nav-item {{ if eq .Active "epochs"}}active{{end}}">
 						<a class="nav-link" href="/epochs">
 						<span class="nav-icon">
@@ -451,13 +443,13 @@
 		</div>
 		</div>
 	</nav>
-    {{ template "css" .Data }}
+	{{ template "css" .Data }}
 
 	<main>
         {{ if .HeaderAd }}
 			<div class="container">
 				<div class="d-flex justify-content-between pt-4 pb-3">
-					<ins data-revive-zoneid="5683" data-revive-id="727bec5e09208690b050ccfc6a45d384"></ins>
+					<ins data-revive-zoneid="1" data-revive-id="5b200397ccf8a9353bf44ef99b45268c"></ins>
 				</div>
 			</div>
         {{end}}
@@ -567,7 +559,7 @@
             return slot
 				}
 				
-				moment.updateLocale('en', {
+		moment.updateLocale('en', {
 			relativeTime: {
 					future : 'in %s',
 					past   : '%s ago',
@@ -646,7 +638,7 @@
 
 		</script>
     {{end}}
-	<script async src="//servedby.revive-adserver.net/asyncjs.php"></script>
+	<script async src="https://ads.bitfly.at/www/delivery/asyncjs.php"></script>
 	</body>
 	</html>
 {{end}}

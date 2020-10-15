@@ -5,6 +5,7 @@
 <script src="https://cdn.jsdelivr.net/npm/vue"></script>
 <script src="/js/highcharts-vue.min.js"></script>
 <script src="/js/highcharts-global-options.js"></script>
+<script src="/js/requestInterval.js"></script>
 <!-- <script type="text/javascript" src="js/slick.min.js"></script> -->
 <!-- <script type="text/javascript" src="//cdn.jsdelivr.net/npm/slick-carousel@1.8.1/slick/slick.min.js"></script> -->
 
@@ -30,6 +31,7 @@
 				epoch: 1,
 				participation: 0.3,
 			}],
+			windowWidth: window.innerWidth,
 			updateIn: -1,
 			page: {{.}},
 	chartOptions: {
@@ -157,6 +159,7 @@
 				return 0
 			}
 		},
+		
 		validatorsMissing: function() {
 			var eligible = 0
 			var voted = 0
@@ -201,6 +204,14 @@
 				this.updateIn--;
 			}
 		}
+	},
+	mounted() {
+		this.$nextTick(() => {
+			window.addEventListener('resize', () => {
+				console.log('resize event', this.windowWidth)
+				this.windowWidth = window.innerWidth
+			})
+		})
 	}
 })
 	
